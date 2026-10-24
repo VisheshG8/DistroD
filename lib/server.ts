@@ -9,16 +9,37 @@ export function database(){
   try{return connectDatabase();}
   catch(error){throw new ApiError(error instanceof Error?error.message:'Database configuration is unavailable.',503);}
 }
+type DataResult<T>={data:T|null;error:{code?:string;message:string}|null};
+/** Unwrap SDK responses while preserving safe database error codes. */
+export async function query<T>(operation:PromiseLike<DataResult<T>>):Promise<T>{
+  const result=await operation;
+  if(result.error){
+    const known=result.error.message.match(/^DD(400|403|404|409):\s*(.{1,350})$/);
+    if(known)throw new ApiError(known[2],Number(known[1]));
+    if(['PGRST202','PGRST205','42883','42P01'].includes(result.error.code||''))throw new ApiError('Database setup is incomplete. Apply all Supabase migrations for this release, then retry.',503);
+    throw result.error;
+  }
+  return result.data as T;
+}
+/** PostgREST caps ordinary selects at 1,000 rows; page through full memberships. */
+export async function queryRows<T>(page:(from:number,to:number)=>PromiseLike<DataResult<T[]>>):Promise<T[]>{
+  const rows:T[]=[];
+  for(let from=0;from<50000;from+=1000){
+    const batch=await query(page(from,from+999));rows.push(...(batch||[]));
+    if(!batch||batch.length<1000)return rows;
+  }
+  return rows;
+}
 export type Account={id:string;email:string|null;name:string|null;userType:'admin'|'user';createdAt:string;lastSeenAt:string};
 export async function currentAccount():Promise<Account>{
   const user=await getCurrentUser();if(!user)throw new ApiError('Sign in to open your workspace.',401);
   const now=new Date().toISOString(),db=database();
-  const email=user.email.trim().toLowerCase(),name=user.fullName?.trim()||(user.displayName!==user.email?user.displayName.trim():null);
+  const email=user.email.trim().toLowerCase(),name=(user.fullName?.trim()||(user.displayName!==user.email?user.displayName.trim():null))?.slice(0,200);
   // Auth's default-user trigger normally creates this row. This repair path never changes roles.
-  await db.prepare(`INSERT INTO users (id,email,name,created_at,last_seen_at) VALUES (?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET email=excluded.email,name=COALESCE(excluded.name,users.name),last_seen_at=excluded.last_seen_at`)
-    .bind(user.userId,email,name||null,now,now).run();
-  const row=await db.prepare('SELECT id,email,name,user_type,created_at,last_seen_at FROM users WHERE id=?').bind(user.userId).first();
+  const existing=await query(db.from('users').select('id,name').eq('id',user.userId).maybeSingle<Record<string,unknown>>());
+  // Never include user_type in a user-derived payload; the database default is user.
+  await query(db.from('users').upsert({id:user.userId,email,name:name||existing?.name||null,last_seen_at:now}, {onConflict:'id'}));
+  const row=await query(db.from('users').select('id,email,name,user_type,created_at,last_seen_at').eq('id',user.userId).maybeSingle<Record<string,unknown>>());
   if(!row)throw new ApiError('Your account could not be opened. Please retry.',503);
   return {id:String(row.id),email:typeof row.email==='string'?row.email:null,name:typeof row.name==='string'?row.name:null,
     userType:row.user_type==='admin'?'admin':'user',createdAt:String(row.created_at),lastSeenAt:String(row.last_seen_at)};
@@ -52,8 +73,8 @@ export function fail(error:unknown){
 export async function encrypt(value:string){try{return encryptSecret(value);}catch(error){throw new ApiError(error instanceof Error?error.message:'Secure key storage is unavailable.',503);}}
 export async function decrypt(value:unknown){try{return decryptSecret(value);}catch(error){throw new ApiError(error instanceof Error?error.message:'The saved provider key could not be read.',503);}}
 export async function preferences(user:string){
-  const db=database();await db.prepare('INSERT INTO settings (owner) VALUES (?) ON CONFLICT (owner) DO NOTHING').bind(user).run();
-  const row=await db.prepare('SELECT * FROM settings WHERE owner=?').bind(user).first();
+  const db=database();await query(db.from('settings').upsert({owner:user},{onConflict:'owner',ignoreDuplicates:true}));
+  const row=await query(db.from('settings').select('*').eq('owner',user).maybeSingle<Record<string,unknown>>());
   if(!row)throw new ApiError('Workspace settings are unavailable.',503);return row;
 }
 function object(value:unknown):Record<string,any>{

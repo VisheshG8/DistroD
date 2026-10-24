@@ -1,6 +1,6 @@
 -- Execute as postgres against a local/disposable Supabase database AFTER the
 -- migration. Every fixture and assertion is rolled back at the end.
--- Example: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/rls.sql
+-- Run in the Supabase SQL Editor after applying the migrations.
 --
 -- PGlite compatibility: before applying the migration, create anon and
 -- authenticated roles; auth.users(id uuid primary key, email text,

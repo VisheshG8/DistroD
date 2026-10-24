@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateSupabaseBackend, validatePublicSecrets } from './verify-env.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_SAFE = Number.MAX_SAFE_INTEGER;
@@ -119,57 +120,34 @@ function parseArgs(args) {
   if (options.apply && options.validateOnly) fail('--apply and --validate-only cannot be combined.');
   return options;
 }
-async function importRows(sql, data, apply) {
-  return sql.begin(async tx => {
-    await tx`select pg_advisory_xact_lock(hashtext('distribution-desk:legacy-import'))`;
-    const users = data.owners.length ? await tx`select id from public.users where id = any(${data.owners}::uuid[])` : [];
-    if (users.length !== data.owners.length) fail('Each mapped target must already exist in public.users. Sign into the new app once for every target user, then retry.');
-    const existingCollections = data.owners.length ? await tx`select id,owner from public.collections where owner = any(${data.owners}::uuid[]) or id = any(${data.collections.map(row => row.id)}::uuid[])` : [];
-    const existingPages = data.owners.length ? await tx`select id,owner,platform,handle from public.pages where owner = any(${data.owners}::uuid[]) or id = any(${data.pages.map(row => row.id)}::uuid[])` : [];
-    const collectionsById = new Map(existingCollections.map(row => [row.id, row]));
-    const pagesById = new Map(existingPages.map(row => [row.id, row]));
-    const pageByHandle = new Map(existingPages.map(row => [JSON.stringify([row.owner, row.platform, row.handle]), row]));
-    const counts = new Map(data.owners.map(id => [id, { collections: existingCollections.filter(row => row.owner === id).length, pages: existingPages.filter(row => row.owner === id).length }]));
-    for (const row of data.collections) {
-      const existing = collectionsById.get(row.id);
-      if (existing && existing.owner !== row.owner) fail('A collection ID is already owned by another user. No changes were applied.');
-      if (!existing) counts.get(row.owner).collections++;
-    }
-    for (const row of data.pages) {
-      const existing = pagesById.get(row.id), sameHandle = pageByHandle.get(JSON.stringify([row.owner, row.platform, row.handle]));
-      if (existing && (existing.owner !== row.owner || existing.platform !== row.platform || existing.handle !== row.handle)) fail('An imported page ID conflicts with an existing page. No changes were applied.');
-      if (sameHandle && sameHandle.id !== row.id) fail('A page handle already exists with a different ID. Resolve the duplicate before importing; existing data will not be overwritten.');
-      if (!existing) counts.get(row.owner).pages++;
-    }
-    for (const value of counts.values()) if (value.collections > 100 || value.pages > 500) fail('Import plus existing records would exceed the limit of 100 collections or 500 pages for a target user.');
-    const result = { collectionsToAdd: data.collections.filter(row => !collectionsById.has(row.id)).length, pagesToAdd: data.pages.filter(row => !pagesById.has(row.id)).length, membershipsInExport: data.memberships.length, owners: data.owners.length };
-    if (!apply) return result;
-    for (const row of data.collections) await tx`insert into public.collections ${tx(row, 'id', 'owner', 'name', 'created_at')} on conflict (id) do nothing`;
-    for (const row of data.pages) await tx`insert into public.pages (id,owner,platform,handle,url,name,followers,posts,coverage,overall,last_synced_at,sync_error,provider,canonical_id,locked_until) values (${row.id},${row.owner},${row.platform},${row.handle},${row.url},${row.name},${row.followers},${tx.json(row.posts)},${tx.json(row.coverage)},${row.overall === null ? null : tx.json(row.overall)},${row.last_synced_at},${row.sync_error},${row.provider},${row.canonical_id},0) on conflict (id) do nothing`;
-    for (const row of data.memberships) await tx`insert into public.memberships ${tx(row, 'collection_id', 'page_id', 'owner')} on conflict (collection_id,page_id) do nothing`;
-    return result;
-  });
+export async function importRows(client, data, apply = false) {
+  const { data: summary, error } = await client.rpc('desk_import_legacy', { p_data: data, p_apply: apply });
+  if (error) {
+    // Do not print remote messages: they can contain SQL values or private row data.
+    const code = typeof error.code === 'string' && /^[A-Z0-9]{5}$/.test(error.code) ? ` (${error.code})` : '';
+    fail(`Import failed${code}. No partial import was committed. Check the target users, ownership conflicts, record limits, and required SDK migrations, then retry.`);
+  }
+  if (!plain(summary)) fail('The import RPC returned an invalid summary. Check the SDK import migration.');
+  return summary;
 }
 async function main() {
-  let sql;
   try {
     const options = parseArgs(process.argv.slice(2));
-    if (options.help) { console.log('Usage: npm run import:legacy -- --file EXPORT.json --owners OWNER-MAP.json [--validate-only | --apply]\nDefault mode checks the target database and reports a dry run. --validate-only checks files without a database connection. --apply inserts in one transaction and never overwrites existing records. DATABASE_URL comes from the environment, never command-line arguments.'); return; }
+    if (options.help) { console.log('Usage: npm run import:legacy -- --file EXPORT.json --owners OWNER-MAP.json [--validate-only | --apply]\nDefault mode checks Supabase through the SDK and reports a dry run. --validate-only checks files without contacting Supabase. --apply calls the atomic import RPC and never overwrites existing records. NEXT_PUBLIC_SUPABASE_URL and server-only SUPABASE_SECRET_KEY (legacy SUPABASE_SERVICE_ROLE_KEY also supported) come from the environment, never command-line arguments.'); return; }
     if (!options.file || !options.owners) fail('Provide --file EXPORT.json and --owners OWNER-MAP.json.');
     const data = validateLegacyExport(await readJson(options.file, 'Export'), await readJson(options.owners, 'Owner map'));
     if (options.validateOnly) { console.log(JSON.stringify({ mode: 'files validated; no database connection', collections: data.collections.length, pages: data.pages.length, memberships: data.memberships.length, owners: data.owners.length })); return; }
-    const databaseUrl = process.env.DATABASE_URL?.trim();
-    if (!databaseUrl) fail('DATABASE_URL is required. Set it in your local environment file; never pass it as an argument.');
-    let parsedUrl; try { parsedUrl = new URL(databaseUrl); } catch { fail('DATABASE_URL is not a valid connection string.'); }
-    if (!['postgres:', 'postgresql:'].includes(parsedUrl.protocol) || !parsedUrl.hostname || !parsedUrl.username || !parsedUrl.password || parsedUrl.searchParams.get('sslmode') === 'disable') fail('DATABASE_URL must be a PostgreSQL connection string with a user, password, and TLS enabled.');
-    const { default: postgres } = await import('postgres');
-    sql = postgres(databaseUrl, { prepare: false, max: 1, connect_timeout: 10, idle_timeout: 5, ssl: 'require', onnotice() {} });
-    const result = await importRows(sql, data, options.apply);
+    const backend = validateSupabaseBackend(process.env);
+    const configErrors = [...backend.errors, ...validatePublicSecrets(process.env)];
+    if (configErrors.length) fail(configErrors.join(' '));
+    const { createClient } = await import('@supabase/supabase-js');
+    const client = createClient(backend.url, backend.key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(120000) }) } });
+    const result = await importRows(client, data, options.apply);
     console.log(JSON.stringify({ mode: options.apply ? 'import committed' : 'dry run; no rows written', ...result }));
     console.log('Accounts, roles, API keys, settings, usage, and local browser preferences were not imported. Re-enter API keys in the new app.');
   } catch (error) {
-    console.error(error instanceof ImportError ? error.message : `Import failed${typeof error?.code === 'string' ? ` (${error.code})` : ''}. No partial import was committed. Check database connectivity and schema, then retry.`);
+    console.error(error instanceof ImportError ? error.message : 'Import failed. Check Supabase connectivity and the SDK migrations. If the connection failed during --apply, the result may be unknown; retrying the same export is safe.');
     process.exitCode = 1;
-  } finally { if (sql) await sql.end({ timeout: 5 }); }
+  }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

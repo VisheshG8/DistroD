@@ -1,6 +1,6 @@
 # Distribution Desk
 
-A standalone Next.js application for grouping Instagram, YouTube, and TikTok pages and comparing their public performance. Vercel hosts the application; Supabase provides Auth and PostgreSQL. It runs without ChatGPT hosting, Cloudflare Workers, or a separate server.
+A standalone Next.js application for grouping Instagram, YouTube, and TikTok pages and comparing their public performance. Vercel hosts the application; Supabase provides Auth and PostgreSQL through its JavaScript SDK and HTTPS APIs. It runs without ChatGPT hosting, Cloudflare Workers, or a separate server.
 
 ## What is included
 
@@ -17,9 +17,9 @@ Follow [DEPLOYMENT.md](./DEPLOYMENT.md) for the exact Supabase and Vercel setup,
 
 The short sequence is:
 
-1. Create a Supabase project and apply `supabase/migrations/20261024000000_init.sql`.
+1. Create a Supabase project and apply all four migrations in chronological order, as listed in [DEPLOYMENT.md](./DEPLOYMENT.md).
 2. Configure Auth URLs and email delivery; enable Google if required.
-3. Copy `.env.example` to `.env.local` and fill in your project values.
+3. Copy `.env.example` to `.env.local` and fill in your project values, including the server-only `SUPABASE_SECRET_KEY` and stable `APP_ENCRYPTION_KEY`.
 4. Run `npm ci`, `npm run check:env`, `npm run typecheck`, `npm test`, and `npm run build`.
 5. Import the repository into Vercel, set the same environment variables, and deploy with the Next.js preset and Node.js 22.
 6. Sign in and promote your own verified account to `admin` using the Supabase SQL Editor.
@@ -46,11 +46,11 @@ A date range selects **when posts were published**. Counts are their current lif
 - `/dashboard` contains only the signed-in user's workspace.
 - `/admin` and `/api/admin` require a stored `public.users.user_type = 'admin'` role.
 - Every new account starts as `user`; mutable Auth metadata cannot grant admin access.
-- Database roles are changed through a privileged SQL connection. There is no public role-assignment endpoint.
+- Database roles are changed manually in the Supabase SQL Editor. There is no public role-assignment endpoint.
 
 ## Import existing records
 
-The optional [legacy import script](./scripts/import-legacy.mjs) maps old owner IDs to existing Supabase Auth user IDs, preserves collection/page IDs and cached snapshots, and inserts in one transaction. It does not transfer accounts, roles, provider keys, settings, usage, or browser preferences. See the data-portability section of [DEPLOYMENT.md](./DEPLOYMENT.md).
+The optional [legacy import script](./scripts/import-legacy.mjs) maps old owner IDs to existing Supabase Auth user IDs, preserves collection/page IDs and cached snapshots, and uses the service-role-only `desk_import_legacy` RPC for an atomic import through the Supabase SDK. It does not transfer accounts, roles, provider keys, settings, usage, or browser preferences. See the data-portability section of [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ```sh
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --validate-only
@@ -58,7 +58,7 @@ npm run import:legacy -- --file workspace-export.json --owners owner-map.json
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --apply
 ```
 
-The second command is a database dry run. Only `--apply` writes records. Existing records are not overwritten.
+The second command checks the target through the Supabase API and reports a dry run. Only `--apply` writes records. Existing records are not overwritten.
 
 ## Useful commands
 
@@ -75,9 +75,9 @@ The second command is a database dry run. Only `--apply` writes records. Existin
 ## Project map
 
 - `app/`: public pages, authenticated workspace, admin UI, Auth callbacks, and API routes.
-- `lib/`: verified identity, server database access, encryption, metric normalization, and provider adapters.
+- `lib/`: verified identity, server Supabase SDK access, encryption, metric normalization, and provider adapters.
 - `supabase/migrations/`: versioned PostgreSQL schema and access policies.
 - `supabase/tests/` and `tests/`: database and application checks.
 - `scripts/`: environment validation and optional data import.
 
-Do not commit `.env.local`, database connection strings, or API keys. Keep the encryption key stable across deployments so saved provider keys remain readable.
+The browser uses the public Supabase URL and publishable key. Server operations require `SUPABASE_SECRET_KEY`; the legacy `SUPABASE_SERVICE_ROLE_KEY` is supported as a fallback. Never place either privileged key in public variables or commit it. A direct PostgreSQL connection string is not required. Keep the encryption key stable across deployments so saved provider keys remain readable.

@@ -1,12 +1,19 @@
 # Deploy Distribution Desk on Supabase and Vercel
 
-This application uses standard Next.js, Supabase Auth, and Supabase PostgreSQL. The source includes the schema and deployment configuration. The hosting accounts, project credentials, Auth providers, and production email service must be configured in your own accounts.
+This application uses standard Next.js, Supabase Auth, and Supabase PostgreSQL through the JavaScript SDK and HTTPS APIs. The source includes the schema and deployment configuration. The hosting accounts, project credentials, Auth providers, and production email service must be configured in your own accounts. The application and import script do not require a direct PostgreSQL connection string.
 
 ## 1. Create the Supabase database
 
-Create a fresh Supabase project, preferably in a region close to your expected users and Vercel function region. Keep its database password in a password manager.
+Create a fresh Supabase project, preferably in a region close to your expected users and Vercel function region.
 
-Apply `supabase/migrations/20261024000000_init.sql` once using the Supabase SQL Editor. Alternatively, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), link this directory to your project, and use its migration workflow:
+Apply these files from `supabase/migrations/` once, in this order, using the Supabase SQL Editor:
+
+1. `20261024000000_init.sql` — tables, identity trigger, and browser access policies.
+2. `20261024010000_sdk_operations.sql` — atomic workspace and refresh operations for the SDK.
+3. `20261024015000_sdk_admin.sql` — authorized admin queries for the SDK.
+4. `20261024020000_sdk_legacy_import.sql` — the optional import RPC.
+
+For an existing project that already has the initial schema, apply only the later migrations that have not been applied. Alternatively, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), link this directory to your project, and use its migration workflow:
 
 ```sh
 supabase login
@@ -16,7 +23,7 @@ supabase db push
 
 Use one migration workflow consistently. Do not rerun the initial SQL against an already initialized database or edit an applied migration. Add a new migration for later schema changes. If using an existing project, review its current tables before applying this schema; `public.users`, `collections`, `pages`, `memberships`, `settings`, and `usage` are application-owned names.
 
-The migration creates:
+The initial migration creates:
 
 | Table | Purpose |
 |---|---|
@@ -27,7 +34,7 @@ The migration creates:
 | `public.settings` | Provider preferences, request cap, and encrypted keys |
 | `public.usage` | Monthly provider request accounting |
 
-Supabase Auth registration creates a normal user profile. Browser Data API access is read-only and protected by row-level security. Browser clients cannot read settings or usage, write counters, or promote themselves. Application writes use the server-only PostgreSQL connection and verify the authenticated owner or stored admin role.
+Supabase Auth registration creates a normal user profile. Browser Data API access is read-only and protected by row-level security. Browser clients cannot read settings or usage, write counters, or promote themselves. The backend verifies the authenticated owner or stored admin role, then uses a separate server-only Supabase client for privileged operations. Named RPCs handle operations that must be atomic; their execution is restricted to `service_role`. No generic SQL execution endpoint is exposed.
 
 ## 2. Configure Auth URLs
 
@@ -85,10 +92,10 @@ Copy `.env.example` to `.env.local` for development. In Vercel, add the same var
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public | Supabase publishable key; the legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` is also supported |
 | `NEXT_PUBLIC_APP_URL` | Public | Application origin; HTTPS is required in production |
 | `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH` | Public | `true` after Google is configured; otherwise `false` |
-| `DATABASE_URL` | Server only | Supabase PostgreSQL transaction-pooler connection string |
+| `SUPABASE_SECRET_KEY` | Server only | Supabase secret key beginning `sb_secret_`; legacy `SUPABASE_SERVICE_ROLE_KEY` is supported as a fallback |
 | `APP_ENCRYPTION_KEY` | Server only | Exactly 32 random bytes encoded as base64 |
 
-For `DATABASE_URL`, copy the **transaction pooler** URI from Supabase's Connect panel. It normally uses port `6543` and a username like `postgres.PROJECT_REF`. This avoids direct-connection IPv6 constraints and is suitable for serverless functions. URL-encode special characters in the password. Keep TLS enabled. The application's PostgreSQL client uses `prepare: false` and a small per-instance connection pool for transaction-pooler compatibility.
+Copy the public URL and publishable key from your Supabase project. Add its server secret key as `SUPABASE_SECRET_KEY` in Vercel and your local environment file. For projects using legacy API keys, use the `service_role` JWT as `SUPABASE_SERVICE_ROLE_KEY` instead. Do not use a publishable or `anon` key for server operations. The privileged client uses HTTPS and is isolated from browser and Auth-session clients; it must never be sent to the browser or included in responses.
 
 Generate the encryption key once:
 
@@ -96,9 +103,9 @@ Generate the encryption key once:
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-Store the result as a server secret and retain it in a password manager. The encrypted provider key format is versioned AES-256-GCM. Changing `APP_ENCRYPTION_KEY` without re-encrypting existing values makes those saved provider keys unreadable; users would need to re-enter them. It does not replace the Supabase database password.
+Store the result as a server secret and retain it in a password manager. The encrypted provider key format is versioned AES-256-GCM. Changing `APP_ENCRYPTION_KEY` without re-encrypting existing values makes those saved provider keys unreadable; users would need to re-enter them. This is a separate secret from the Supabase API key.
 
-Never put `DATABASE_URL`, `APP_ENCRYPTION_KEY`, a Supabase secret/service-role key, or a provider key in a `NEXT_PUBLIC_*` variable. A Supabase service-role key is not required by this application.
+Never put `SUPABASE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `APP_ENCRYPTION_KEY`, or a provider key in a `NEXT_PUBLIC_*` variable. A Supabase server secret or legacy service-role key is required for the backend and remote import checks. Browser code must use only the publishable or legacy anon key.
 
 Validate without printing values:
 
@@ -107,7 +114,7 @@ npm run check:env
 npm run check:env -- --production
 ```
 
-This validates formats and required fields. It does not prove that a password, network route, OAuth provider, SMTP service, or database schema is correct.
+This validates formats and required fields. It does not prove that the keys belong to the intended project, the APIs are reachable, or the OAuth provider, SMTP service, and database migrations are correctly configured.
 
 The pre-build guard also rejects a Supabase secret/service-role key placed in public configuration before it can be bundled. An environment-free build can render the setup screen; it is not a configured production deployment. Run the full production environment check with your intended production values, then complete the hosted smoke checks below.
 
@@ -203,18 +210,20 @@ Example `owner-map.json`:
 {"old-owner-id":"11111111-1111-4111-8111-111111111111"}
 ```
 
-Use your actual target UUID, not the example. Review the export, keep it outside Git, and take a target database backup. Set `DATABASE_URL` through `.env.local`, then run:
+Use your actual target UUID, not the example. Review the export, keep it outside Git, and take a target database backup. Apply the legacy import migration and set the Supabase URL plus server secret through `.env.local`, then run:
 
 ```sh
 # Validate JSON, ownership references, counters, URLs, and size limits only.
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --validate-only
 
-# Connect to the target and check users, collisions, and final record limits. No rows are written.
+# Check target users, collisions, and final record limits through the Supabase API. No rows are written.
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json
 
 # Insert new rows in one transaction after reviewing the dry run.
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --apply
 ```
+
+The importer validates the files locally, then calls `desk_import_legacy(p_data jsonb, p_apply boolean default false)` using the Supabase JavaScript SDK. The named function runs as its caller and is executable only by `service_role`. A dry run takes the same per-owner locks and checks as an import but writes no rows; an applied import completes in one transaction.
 
 The importer preserves collection and page IDs, cached posts, coverage, and last-refresh timestamps; it clears stale refresh locks. Existing rows are never overwritten. Conflicting IDs, another owner's records, or a handle already saved under a different page ID cause the transaction to fail. Repeating the same successful import is safe because existing matching records are skipped.
 
@@ -235,8 +244,8 @@ Accounts, roles, API keys, settings, usage, and browser preferences are not impo
 | Login shows setup instructions | Missing public Supabase URL/key or production app origin; set variables and rebuild |
 | Callback fails or returns to the wrong domain | Supabase Site URL, exact callback allowlist, and `NEXT_PUBLIC_APP_URL` |
 | Confirmation/recovery email never arrives | SMTP sender verification, provider logs, spam folder, Auth email limits, and templates |
-| Database connection fails on Vercel | Transaction-pooler URI, encoded password, port 6543, TLS, and Supabase project status |
-| Missing relation or profile errors | Initial migration was not applied, or the deployment points to the wrong project |
+| Backend Supabase API calls fail | Supabase project URL/status, server secret, API reachability, and server-only configuration |
+| Missing relation, profile, or RPC errors | A required migration was not applied, or the deployment points to the wrong project |
 | Admin access denied | Verify the signed-in account's UUID and stored `public.users.user_type`; reload after SQL change |
 | Saved provider key cannot be read | `APP_ENCRYPTION_KEY` differs from the key used when the value was saved |
 | Provider refresh fails | User key, provider balance/status, supported endpoint, and the app's request cap |
@@ -244,7 +253,8 @@ Accounts, roles, API keys, settings, usage, and browser preferences are not impo
 ## Primary documentation
 
 - [Supabase Next.js SSR setup](https://supabase.com/docs/guides/auth/server-side/creating-a-client?framework=nextjs)
-- [Supabase database connections](https://supabase.com/docs/guides/database/connecting-to-postgres)
+- [Supabase API keys](https://supabase.com/docs/guides/api/api-keys)
+- [Supabase database functions](https://supabase.com/docs/guides/database/functions)
 - [Supabase row-level security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Supabase Google authentication](https://supabase.com/docs/guides/auth/social-login/auth-google)
 - [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates)

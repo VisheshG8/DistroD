@@ -2,9 +2,36 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+function legacyRole(key) {
+  if (typeof key !== 'string' || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(key)) return null;
+  try { return JSON.parse(Buffer.from(key.split('.')[1], 'base64url').toString()).role || null; }
+  catch { return null; }
+}
+export function isPrivilegedSupabaseKey(key) { return typeof key === 'string' && (key.startsWith('sb_secret_') || legacyRole(key) === 'service_role'); }
+export function isSupabaseServiceKey(key) { return typeof key === 'string' && (/^sb_secret_[A-Za-z0-9_-]+$/.test(key) || legacyRole(key) === 'service_role'); }
+export function validatePublicSecrets(env) {
+  return Object.entries(env).filter(([name, value]) => name.startsWith('NEXT_PUBLIC_') && isPrivilegedSupabaseKey(typeof value === 'string' ? value.trim() : value)).map(([name]) => `${name} must never contain a Supabase secret/service_role key.`);
+}
+
+/** The importer and server use the HTTPS SDK; no SQL connection credentials are needed. */
+export function validateSupabaseBackend(env) {
+  const errors = [];
+  const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim() || '';
+  try {
+    const parsed = new URL(url);
+    const localHttp = parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+    if ((parsed.protocol !== 'https:' && !localHttp) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) throw new Error();
+  }
+  catch { errors.push('NEXT_PUBLIC_SUPABASE_URL must be the Supabase project API origin.'); }
+  const key = env.SUPABASE_SECRET_KEY?.trim() || env.SUPABASE_SERVICE_ROLE_KEY?.trim() || '';
+  if (!key) errors.push('SUPABASE_SECRET_KEY is required (legacy SUPABASE_SERVICE_ROLE_KEY is also supported).');
+  else if (!isSupabaseServiceKey(key)) errors.push('SUPABASE_SECRET_KEY must be a Supabase secret key or legacy service_role JWT; publishable/anon keys cannot authorize backend operations.');
+  return { errors, url, key };
+}
+
 /** Validate configuration without printing secrets or contacting external services. */
 export function validateEnvironment(env, { production = false } = {}) {
-  const errors = [], warnings = [];
+  const errors = [...validatePublicSecrets(env)], warnings = [];
   const required = name => {
     const value = env[name]?.trim();
     if (!value || /^(?:your[-_ ]|replace[-_ ]|<)|YOUR_PROJECT|YOUR_PASSWORD|YOUR_REGION|BASE64_ENCODED_32/i.test(value)) errors.push(`${name} is required.`);
@@ -21,18 +48,8 @@ export function validateEnvironment(env, { production = false } = {}) {
   origin(supabaseUrl, 'NEXT_PUBLIC_SUPABASE_URL', production);
   const publicKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() || env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() || '';
   if (!publicKey || /^(?:your[-_ ]|replace[-_ ]|<)/i.test(publicKey)) errors.push('Set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (or the legacy NEXT_PUBLIC_SUPABASE_ANON_KEY).');
-  if (publicKey.startsWith('sb_secret_')) errors.push('A Supabase secret key must never be used as a NEXT_PUBLIC key. Use the publishable key.');
-  if (publicKey.split('.').length === 3) {
-    try { if (JSON.parse(Buffer.from(publicKey.split('.')[1], 'base64url').toString()).role === 'service_role') errors.push('A service_role key must never be exposed through NEXT_PUBLIC configuration.'); }
-    catch { errors.push('The legacy Supabase anon key is malformed.'); }
-  }
-  const databaseUrl = required('DATABASE_URL');
-  if (databaseUrl) try {
-    const url = new URL(databaseUrl);
-    if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.username || !url.password) throw new Error();
-    if (production && url.searchParams.get('sslmode') === 'disable') errors.push('DATABASE_URL cannot disable TLS in production.');
-    if (production && !(url.hostname.endsWith('.pooler.supabase.com') && url.port === '6543')) warnings.push('For Vercel, use Supabase’s transaction-pooler connection string (port 6543). Other connection types need their own connectivity and pooling checks.');
-  } catch { errors.push('DATABASE_URL must be a PostgreSQL connection string containing a database user and password.'); }
+  if (publicKey && !/^sb_publishable_[A-Za-z0-9_-]+$/.test(publicKey) && legacyRole(publicKey) !== 'anon') errors.push('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be a Supabase publishable key or legacy anon JWT.');
+  errors.push(...validateSupabaseBackend(env).errors);
   const encryptionKey = required('APP_ENCRYPTION_KEY');
   if (encryptionKey && (!/^[A-Za-z0-9+/]{43}=$/.test(encryptionKey) || Buffer.from(encryptionKey, 'base64').length !== 32)) errors.push('APP_ENCRYPTION_KEY must be exactly 32 random bytes encoded as base64.');
   const appUrl = env.NEXT_PUBLIC_APP_URL?.trim();

@@ -1,11 +1,17 @@
 # Verification
 
-Verified on 24 October 2026 using Node.js 22.21.1.
+Verified on 24 October 2026 using Node.js 22.21.1:
 
+- Standard `npm run typecheck` completed without errors.
+- Standard `npm test`: all 94 tests passed.
 - Standard `npm run build` completed with Next.js 16.4.3.
-- `npm test`: 67 tests passed, including real PostgreSQL-engine (PGlite) RLS/schema and API transaction tests.
-- Production dependency audit: no known vulnerabilities reported at verification time.
-- Standalone production server returned the homepage/login; protected pages redirect to login, APIs reject anonymous access, sign-out is POST-only.
-- Public homepage and independent sign-in screen inspected in the browser.
+- Production dependency audit reported zero known vulnerabilities.
+- The built production server returned the homepage and login with HTTP 200. Protected dashboard/admin pages redirected to login; account, workspace, and admin APIs rejected anonymous access with HTTP 401. Refresh and sign-out remained POST-only.
 
-The actual Supabase project, email/Google provider configuration, and Vercel deployment need your project settings. Real provider login, SMTP delivery, hosted database connectivity, and the final deployed application must be smoke-tested using DEPLOYMENT.md. Existing hosted records are not automatically transferred; the optional importer requires a complete export and an explicit old-owner-to-Supabase-user mapping.
+The SDK regression tests use the real Supabase JavaScript client with a PostgreSQL-backed test transport. They verify request serialization and owner filters, account-role preservation, encrypted provider settings, pagination beyond 1,000 memberships, atomic request caps, refresh leases, alias merge/rollback, and duplicate-canonical-page races. SQL integration tests apply the actual migrations in PGlite and check browser grants, RLS, backend-only RPC execution, stored admin authorization, safe metric totals, and atomic legacy imports.
+
+No direct PostgreSQL driver or connection string is used by the app or importer. Backend requests require the server-only Supabase secret key; encryption still requires the stable application encryption key.
+
+The actual Supabase project and Vercel deployment were not connected during these checks. Real Supabase Data API access, email/Google login, SMTP delivery, provider requests, and the final hosted application still need the project-specific smoke checks in DEPLOYMENT.md. Local tests do not replace those hosted checks.
+
+Existing hosted records are not automatically transferred. The optional importer requires a complete export and an explicit old-owner-to-Supabase-user mapping; it never imports roles or saved API keys.
