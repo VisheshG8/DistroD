@@ -1,56 +1,190 @@
 # Distribution Desk
 
-A standalone Next.js application for grouping Instagram, YouTube, and TikTok pages and comparing their public performance. Vercel hosts the application; Supabase provides Auth and PostgreSQL through its JavaScript SDK and HTTPS APIs. It runs without ChatGPT hosting, Cloudflare Workers, or a separate server.
+Distribution Desk brings Instagram, YouTube, and TikTok pages into one workspace. Group a creator's official accounts, fan pages, clipping channels, or a brand's pages into collections, then compare their available public metrics side by side and as combined totals.
 
-## What is included
+The application runs on Next.js with Supabase for authentication and PostgreSQL storage. It is configured for deployment on Vercel and uses the Supabase JavaScript SDK over HTTPS for backend data access.
 
-- Public homepage, Google sign-in when enabled, and email/password registration, sign-in, confirmation, and password recovery.
-- Private workspaces with collections, bulk page entry, duplication, page removal, CSV export, and manual refreshes.
-- Recent-post and publication-date selections, coverage labels, and separate lifetime profile totals where available.
-- Selectable table columns and manual metric overrides marked with `*`. These preferences are saved per account in the browser.
-- A database-controlled admin area with People, Collections, and Pages, including owner details.
-- Supabase schema, read-only browser RLS policies, encrypted provider keys, atomic request accounting, and refresh locks.
+## Features
 
-## Deploy
+- **Private workspaces:** email/password registration, email confirmation, password recovery, and optional Google sign-in.
+- **Collections:** create, rename, duplicate, and delete groups; add pages in bulk and remove pages from individual collections.
+- **Cross-platform comparison:** followers/subscribers, selected-post views, likes, comments, shares, and post counts, with separate profile lifetime totals where available.
+- **Flexible selections:** choose 1-1,000 recent posts per page or a publication date range, with coverage labels and last-refresh details.
+- **Manual refreshes:** refresh one page or the visible selection, with progress, error feedback, cached snapshots, and a monthly provider request cap.
+- **Reporting:** search, filter by platform, sort pages, choose visible columns, and export the current view as CSV.
+- **Manual metric entries:** edit displayed values; an asterisk (`*`) and CSV flags identify manual values. Overrides and column preferences are saved per account in that browser.
+- **Admin directory:** inspect People, Collections, and Pages across registered workspaces, including ownership and collection membership.
 
-Follow [DEPLOYMENT.md](./DEPLOYMENT.md) for the exact Supabase and Vercel setup, Auth redirect URLs, environment variables, and first-admin instructions. You need your own Supabase and Vercel projects; this source package does not contain project credentials or a preconfigured live deployment.
+## Tech stack
 
-The short sequence is:
+| Area | Technology |
+|---|---|
+| Application | Next.js 16 App Router, React 19, TypeScript |
+| Styling and icons | Tailwind CSS 4, custom CSS, Lucide |
+| Authentication | Supabase Auth with server-side session handling |
+| Database | Supabase PostgreSQL, row-level security, and server-only RPCs |
+| Data providers | TikHub, ScrapeCreators, optional YouTube Data API v3 |
+| Hosting and runtime | Vercel, Node.js 22.x |
+| Verification | TypeScript, Node.js test runner, PostgreSQL integration tests using PGlite |
 
-1. Create a Supabase project and apply all four migrations in chronological order, as listed in [DEPLOYMENT.md](./DEPLOYMENT.md).
-2. Configure Auth URLs and email delivery; enable Google if required.
-3. Copy `.env.example` to `.env.local` and fill in your project values, including the server-only `SUPABASE_SECRET_KEY` and stable `APP_ENCRYPTION_KEY`.
-4. Run `npm ci`, `npm run check:env`, `npm run typecheck`, `npm test`, and `npm run build`.
-5. Import the repository into Vercel, set the same environment variables, and deploy with the Next.js preset and Node.js 22.
-6. Sign in and promote your own verified account to `admin` using the Supabase SQL Editor.
+Exact dependency versions are in [package.json](./package.json) and [package-lock.json](./package-lock.json).
 
-## Local development
+## Local setup
+
+You need Node.js **22.x**, npm, and a Supabase project. Use a separate Supabase project for development, or configure a local stack with [supabase/config.toml](./supabase/config.toml).
+
+### 1. Install dependencies
+
+Open PowerShell in the main workspace:
+
+```powershell
+Set-Location 'P:\VI\distribution-desk'
+npm ci
+```
+
+### 2. Initialize Supabase
+
+Apply the migrations once, in this order, through the Supabase SQL Editor or the Supabase CLI migration workflow:
+
+| Migration | Purpose |
+|---|---|
+| [20261024000000_init.sql](./supabase/migrations/20261024000000_init.sql) | Tables, Auth profile trigger, and browser access policies |
+| [20261024010000_sdk_operations.sql](./supabase/migrations/20261024010000_sdk_operations.sql) | Atomic collection, page, request-accounting, and refresh operations |
+| [20261024015000_sdk_admin.sql](./supabase/migrations/20261024015000_sdk_admin.sql) | Admin directory queries with stored-role authorization |
+| [20261024020000_sdk_legacy_import.sql](./supabase/migrations/20261024020000_sdk_legacy_import.sql) | RPC for optional legacy workspace imports |
+
+For an existing database, apply only migrations that have not already run. The application tables are `users`, `collections`, `pages`, `memberships`, `settings`, and `usage` in the `public` schema.
+
+Enable the Email provider in Supabase Auth. For local development, set the Site URL to `http://localhost:3000` and allow `http://localhost:3000/auth/callback` as a redirect URL. Email confirmation and password recovery also use the app's Auth routes. See [DEPLOYMENT.md](./DEPLOYMENT.md) for email templates, SMTP, Google OAuth, and production Auth configuration.
+
+### 3. Configure environment variables
+
+Create `.env.local` in the project root, or update your existing one, with your project values. Use the template below and replace every placeholder:
+
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_REPLACE_ME
+SUPABASE_SECRET_KEY=sb_secret_REPLACE_ME
+APP_ENCRYPTION_KEY=YOUR_BASE64_ENCODED_32_BYTE_KEY
+
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_ENABLE_GOOGLE_AUTH=false
+```
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project API origin |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public key used by browser and Auth clients |
+| `SUPABASE_SECRET_KEY` | Server-only key for authorized backend operations |
+| `APP_ENCRYPTION_KEY` | Server-only key used to encrypt saved provider API keys with AES-256-GCM |
+| `NEXT_PUBLIC_APP_URL` | Full application origin, including `http://` locally or `https://` in production; no path |
+| `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH` | Set to `true` after configuring Google in Supabase Auth; otherwise `false` |
+
+Legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are supported as fallbacks for the public and server keys respectively. **A `DATABASE_URL` is not required** by the app or importer.
+
+Generate `APP_ENCRYPTION_KEY` once with:
 
 ```sh
-npm ci
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+Keep this key stable and backed up across deployments. Changing it makes existing encrypted provider keys unreadable unless they are re-encrypted or entered again. Keep all server secrets out of Git and `NEXT_PUBLIC_*` variables.
+
+Next.js also loads `.env`, but the `check:env` and `import:legacy` commands explicitly load `.env.local`. Use `.env.local` for local configuration so those commands see the same values as the application.
+
+### 4. Validate and start
+
+```sh
 npm run check:env
 npm run dev
 ```
 
-Open `http://localhost:3000`. Use a separate development Supabase project, or configure the supplied Supabase CLI project for a local stack. The Auth redirect allowlist must include the local callback URL.
+Open [http://localhost:3000](http://localhost:3000). The environment check validates required values and formats without printing secrets; it does not verify Supabase connectivity, migrations, or Auth provider setup.
 
-## Data sources
+## Using the workspace
 
-Users enter their own TikHub or ScrapeCreators key in API settings. The official YouTube Data API v3 is supported through an optional YouTube key. Keys are encrypted before storage and never included in CSV or admin responses. Provider billing and API availability are separate from application hosting.
+1. Register and confirm your email, or sign in with Google if enabled.
+2. Create a collection named after a creator, brand, or another group you want to track.
+3. Add public profile URLs or handles. Bulk entry accepts one per line or comma-separated entries; choose the platform for bare handles.
+4. Open **API settings**, select TikHub or ScrapeCreators, and save your own provider key. You can also add a YouTube Data API key for YouTube channels.
+5. Choose a recent-post count or publication date range, then refresh the pages.
+6. Compare totals, review coverage, customize visible columns, and export CSV when needed.
 
-A date range selects **when posts were published**. Counts are their current lifetime counters, as of the last successful refresh; they are not views gained during that range. Missing counters remain unavailable, and partial coverage is labelled. A page's cached data is reused across its collections.
+You can organize pages before connecting a provider. Fetching metrics requires the appropriate key. Provider keys are encrypted before database storage and are excluded from workspace, admin, and CSV responses.
 
-## Accounts and access
+The current limits are **100 collections**, **500 unique pages per user**, and **100 entries per bulk-add request**. The monthly request cap is configurable from **10 to 2,500** calls, with a default of **500**. It counts provider request attempts, including retries; provider charges and quotas are separate from application hosting.
 
-- `/` and `/login` are public.
-- `/dashboard` contains only the signed-in user's workspace.
-- `/admin` and `/api/admin` require a stored `public.users.user_type = 'admin'` role.
-- Every new account starts as `user`; mutable Auth metadata cannot grant admin access.
-- Database roles are changed manually in the Supabase SQL Editor. There is no public role-assignment endpoint.
+## Understanding the numbers
+
+- **Publication ranges:** dates select posts published within the chosen range, using India calendar dates. The displayed counts are those posts' lifetime counters as of the last successful refresh. For example, selecting October shows counters on October-published posts, not views gained during October.
+- **Coverage:** providers may return partial data or omit counters and dates. A dash means unavailable; totals add available values, and coverage labels show whether a selection is complete.
+- **Profile totals:** lifetime views and post counts are separate from selected-post totals. Automatic lifetime view totals are available for YouTube; Instagram and TikTok do not supply public account lifetime view totals through these adapters.
+- **YouTube uploads:** selections can include both Shorts and other public videos. The official API does not expose public share counts. With TikHub alone, use a `/channel/UC...` URL; add a YouTube Data API key to resolve `@handles`.
+- **Shared pages:** a page's saved snapshot is reused across its collections within the same user's workspace. Duplicating a collection creates a separate page list; it does not create independent snapshots. All pages counts each saved page once.
+- **Audience totals:** follower/subscriber counts are added across pages; audiences can overlap, so the sum is not a count of unique people.
+- **Manual entries:** overrides affect displayed totals and CSV exports, retain the `*` marker, and leave stored provider snapshots intact. They are browser-local and do not sync across devices.
+- **Refresh behavior:** refreshes are initiated in the UI and run page by page. Matching snapshots less than five minutes old may be reused. Failed refreshes preserve the last successful snapshot; background scheduled collection is not implemented.
+
+## Accounts and admin access
+
+| Route | Access |
+|---|---|
+| `/` and `/login` | Public homepage and authentication |
+| `/dashboard` | Signed-in user's own workspace |
+| `/reset-password` | Authenticated password recovery |
+| `/api/account`, `/api/desk`, `/api/refresh` | Authenticated backend operations with ownership checks |
+| `/admin` and `/api/admin` | Stored `public.users.user_type = 'admin'` role |
+
+New accounts start as `user`. To create the first admin, register, sign in, and identify your verified account's UUID in `public.users`. Then run the following in the Supabase SQL Editor, replacing the placeholder with that exact UUID:
+
+```sql
+update public.users
+set user_type = 'admin'
+where id = 'YOUR_VERIFIED_USER_UUID';
+```
+
+Reload the dashboard to see the Admin link. Set the role back to `user` to revoke access. Role assignment is controlled in the database; editable Auth metadata cannot grant admin access.
+
+Browser database access is read-only and protected by row-level security. Backend writes use a separate server-only Supabase client after authentication and authorization. Atomic RPCs are restricted to the service role. Admin access does not expose saved provider keys.
+
+## Deploy to Vercel
+
+1. Apply all required Supabase migrations and configure Auth providers and production email delivery.
+2. Import the repository into Vercel with the **Next.js** preset, **Node.js 22.x**, install command `npm ci`, and build command `npm run build`.
+3. Set the application variables in Vercel. Use the complete production HTTPS origin for `NEXT_PUBLIC_APP_URL`, for example `https://your-app.vercel.app`.
+4. Set Supabase's Site URL to that origin and allow its exact `/auth/callback` URL. Configure preview deployments separately when needed.
+5. Validate the intended production environment with `npm run check:env -- --production`, run the checks below, and deploy. Rebuild after changing public variables.
+6. Test registration, confirmation, recovery, workspace isolation with two accounts, admin access, provider refreshes, and CSV exports on the hosted app.
+
+The refresh route declares a 300-second maximum duration; verify the deployment supports it. The full configuration and hosted smoke checks are in [DEPLOYMENT.md](./DEPLOYMENT.md). Local checks do not establish that a production deployment or external providers are configured correctly.
+
+## Development commands
+
+| Command | Purpose |
+|---|---|
+| `npm ci` | Install dependencies from the committed lockfile |
+| `npm run dev` | Start the local Next.js development server |
+| `npm run check:env` | Validate local environment variable formats |
+| `npm run check:env -- --production` | Validate required production configuration |
+| `npm run typecheck` | Check TypeScript types |
+| `npm test` | Run application and PostgreSQL regression tests |
+| `npm run build` | Create the production build |
+| `npm start` | Serve an existing production build |
+| `npm run import:legacy -- --help` | Show legacy import options |
+
+Before deploying application changes, run:
+
+```sh
+npm run typecheck
+npm test
+npm run build
+```
+
+The GitHub Actions workflow runs these checks after installing dependencies. See [VERIFICATION.md](./VERIFICATION.md) for the recorded verification scope and hosted checks still required.
 
 ## Import existing records
 
-The optional [legacy import script](./scripts/import-legacy.mjs) maps old owner IDs to existing Supabase Auth user IDs, preserves collection/page IDs and cached snapshots, and uses the service-role-only `desk_import_legacy` RPC for an atomic import through the Supabase SDK. It does not transfer accounts, roles, provider keys, settings, usage, or browser preferences. See the data-portability section of [DEPLOYMENT.md](./DEPLOYMENT.md).
+The optional [legacy importer](./scripts/import-legacy.mjs) maps old owner IDs to existing Supabase Auth user IDs and preserves collection/page IDs, memberships, cached snapshots, and refresh timestamps. Create the target accounts first and prepare an authorized export plus an owner map using the format in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ```sh
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --validate-only
@@ -58,26 +192,20 @@ npm run import:legacy -- --file workspace-export.json --owners owner-map.json
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --apply
 ```
 
-The second command checks the target through the Supabase API and reports a dry run. Only `--apply` writes records. Existing records are not overwritten.
+The first command validates files locally. The second checks the target through Supabase and reports a dry run. Only `--apply` writes records, in one transaction; existing records are not overwritten. Accounts, roles, provider keys, settings, usage, and browser preferences are not transferred.
 
-## Useful commands
+## Project structure
 
-| Command | Purpose |
+| Path | Contents |
 |---|---|
-| `npm run dev` | Local Next.js development server |
-| `npm run build` | Production Next.js build |
-| `npm start` | Run a built application |
-| `npm run typecheck` | TypeScript validation |
-| `npm test` | Application and database regression tests |
-| `npm run check:env -- --production` | Validate production variable formats without printing secrets |
-| `npm run import:legacy -- --help` | Import usage and safety behavior |
-
-## Project map
-
-- `app/`: public pages, authenticated workspace, admin UI, Auth callbacks, and API routes.
-- `lib/`: verified identity, server Supabase SDK access, encryption, metric normalization, and provider adapters.
-- `supabase/migrations/`: versioned PostgreSQL schema and access policies.
-- `supabase/tests/` and `tests/`: database and application checks.
-- `scripts/`: environment validation and optional data import.
-
-The browser uses the public Supabase URL and publishable key. Server operations require `SUPABASE_SECRET_KEY`; the legacy `SUPABASE_SERVICE_ROLE_KEY` is supported as a fallback. Never place either privileged key in public variables or commit it. A direct PostgreSQL connection string is not required. Keep the encryption key stable across deployments so saved provider keys remain readable.
+| `app/` | Homepage, dashboard, admin page, authentication routes, API routes, and styles |
+| `components/` | Workspace dashboard, admin directory, and Auth forms |
+| `lib/` | Identity checks, Supabase clients, encryption, provider adapters, metric display, and selection logic |
+| `public/` | Static assets |
+| `scripts/` | Environment validation, public-secret build guard, and legacy importer |
+| `supabase/migrations/` | Versioned schema, access policies, and backend RPCs |
+| `supabase/tests/` | SQL access-policy checks |
+| `tests/` | Application and PostgreSQL regression tests |
+| `.github/workflows/ci.yml` | Automated typecheck, test, and build workflow |
+| `DEPLOYMENT.md` | Detailed setup, operations, data import, and troubleshooting |
+| `vercel.json` | Vercel framework and install/build commands |
