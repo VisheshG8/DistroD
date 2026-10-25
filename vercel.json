@@ -3,5 +3,5 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm ci",
-  "crons": [{ "path": "/api/cron/refresh", "schedule": "17 * * * *" }]
+  "crons": [{ "path": "/api/cron/refresh", "schedule": "17 0 * * *" }]
 }

@@ -91,7 +91,7 @@ npm test
 npm run build
 ```
 
-Import the repository into Vercel as a Next.js project, select Node.js 22.x, and use `npm ci` with `npm run build`. Review the cron plan requirement below **before deploying**. An environment-free build can show the demo and setup screens; it does not mean authentication or live data is configured.
+Import the repository into Vercel as a Next.js project, select Node.js 22.x, and use `npm ci` with `npm run build`. The default daily cron supports Vercel Hobby; review its setup and batch limits below before enabling scheduled refresh. An environment-free build can show the demo and setup screens; it does not mean authentication or live data is configured.
 
 Refresh/cron routes declare a 300-second maximum duration and use shorter internal deadlines. Confirm the [function limits of your Vercel plan](https://vercel.com/docs/functions/configuring-functions/duration). Keep the function region near Supabase. For a local production smoke check after building, use `npm start`.
 
@@ -129,9 +129,11 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 Set it as `CRON_SECRET` in Vercel. The endpoint requires `Authorization: Bearer <CRON_SECRET>`; cookies or query-string tokens are not accepted. Vercel supplies this header for configured cron invocations.
 
-`vercel.json` schedules `/api/cron/refresh` at `17 * * * *` (UTC). **This hourly expression requires a supporting Vercel plan. Hobby rejects schedules more frequent than daily**, even if the database refresh switch is off. For Hobby, change/remove that cron entry before deployment. A daily invocation processes only one bounded batch; use an authenticated external scheduler or a suitable plan if the queue needs hourly runs. See [Vercel cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing).
+`vercel.json` schedules `/api/cron/refresh` once daily at `17 0 * * *` (00:17 UTC). **This default schedule supports Vercel Hobby.** The exact execution time is not guaranteed on Hobby. Scheduling remains paused in the database until you enable it after configuring keys, the cron secret, and provider prices. Manual refresh remains available while it is paused.
 
-Each invocation uses an internal roughly 220-second deadline and at most 50 attempted shared accounts, selecting oldest attempts first. Each account normally becomes due after 24 hours, not every hourly invocation. Work beyond the batch/deadline remains for a later run. Recent-post fetching, paging costs, and slow providers can reduce throughput. Inactive pages do not refresh automatically. Shared cached results are copied to each owner's history without copying their private details into the shared cache.
+Each invocation uses an internal roughly 220-second deadline and at most 50 attempted shared accounts, selecting oldest attempts first. Each account normally becomes due after 24 hours. Work beyond the batch/deadline remains for a later run. **The daily default does not guarantee that every account refreshes each day**; larger queues may take several days, and recent-post fetching, paging costs, or slow providers can reduce throughput. Inactive pages do not refresh automatically. Shared cached results are copied to each owner's history without copying their private details into the shared cache.
+
+If the queue needs more frequent processing, use an authenticated external scheduler or a Vercel plan supporting hourly cron. On a supporting Vercel plan, change the expression to `17 * * * *`; with an external scheduler on Hobby, remove the built-in cron entry instead. Hobby rejects expressions that run more than once per day, even when the database refresh switch is off. See [Vercel cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing).
 
 At 75% of either cap, the interval doubles; at 90%, it quadruples. At the cap, paid requests stop and saved data stays available. Every attempt, including retry/fallback, reserves its request and estimated cost atomically. Provider invoices may differ from these configured estimates.
 

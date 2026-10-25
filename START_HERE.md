@@ -25,7 +25,7 @@ For an optional developer JSON fixture: `node scripts/seed-demo.mjs --output ./d
 5. To make your own verified account an admin, change `public.users.user_type` to `admin` for its exact UUID in Supabase. The SQL example is in [DEPLOYMENT.md](./DEPLOYMENT.md). No login or registration option grants admin access.
 6. Set server provider keys and review `/admin/providers`. Test one small refresh before enabling automatic refresh.
 
-Scheduled refresh starts **paused**. The configured hourly Vercel cron needs a plan supporting hourly jobs and a `CRON_SECRET` of at least 32 characters. Set actual provider rates before enabling it; the shared estimated budget defaults to $25/month.
+Scheduled refresh starts **paused**. The default daily Vercel cron supports the Hobby plan. Before enabling it, configure shared provider keys, a `CRON_SECRET` of at least 32 characters, and actual provider rates; the shared estimated budget defaults to $25/month. Each daily run attempts at most 50 shared accounts within roughly 220 seconds, so larger queues may take several days. Manual refresh remains available. See [DEPLOYMENT.md](./DEPLOYMENT.md) for more frequent scheduling options.
 
 ## What to expect
 
