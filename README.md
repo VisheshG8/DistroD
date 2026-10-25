@@ -15,7 +15,7 @@ The application runs on Next.js with Supabase for authentication and PostgreSQL 
 - **Workspace backups:** export every collection, tracked social account, post snapshot, metric and saved view as JSON, then import into another login with a preview and duplicate detection. Large backups transfer in chunks.
 - **Easier navigation:** searchable collections, mobile navigation, 25-row table pagination, and a monthly API usage meter. Totals and CSV exports still cover all matching pages.
 - **Manual metric entries:** edit displayed values; an asterisk (`*`) and CSV flags identify manual values. Overrides and column preferences are saved per account in that browser.
-- **Admin directory:** inspect People, Collections, and Pages across registered workspaces, including ownership and collection membership.
+- **Admin directory:** start with People, then open their Collections or Pages. Follow collection breadcrumbs, expand saved page metrics, and see the collections each page belongs to. Access comes only from the stored database role.
 
 ## Tech stack
 
@@ -55,6 +55,7 @@ Apply the migrations once, in this order, through the Supabase SQL Editor or the
 | [20261024015000_sdk_admin.sql](./supabase/migrations/20261024015000_sdk_admin.sql) | Admin directory queries with stored-role authorization |
 | [20261024020000_sdk_legacy_import.sql](./supabase/migrations/20261024020000_sdk_legacy_import.sql) | Atomic import validation for workspace restoration and legacy imports |
 | [20261025000000_workspace_transfer.sql](./supabase/migrations/20261025000000_workspace_transfer.sql) | Portable record identities and private, chunked workspace backup/import operations |
+| [20261026000000_admin_directory.sql](./supabase/migrations/20261026000000_admin_directory.sql) | Collection names and metric availability in the admin directory |
 
 For an existing database, apply only migrations that have not already run. The application tables are `users`, `collections`, `pages`, `memberships`, `settings`, and `usage` in the `public` schema.
 
@@ -164,6 +165,10 @@ where id = 'YOUR_VERIFIED_USER_UUID';
 ```
 
 Reload the dashboard to see the Admin link. Set the role back to `user` to revoke access. Role assignment is controlled in the database; editable Auth metadata cannot grant admin access.
+
+Everyone uses the same sign-in and account-creation screens, with no admin option or role selector. The admin directory opens on **People**. Choose **Collections** or **Pages** beside a person, then open a collection to inspect its pages. Breadcrumbs keep the owner in view. Expand a page's details to see its saved metrics, refresh time, and collection names. Partial metric totals identify how many saved posts supplied the count. These are saved provider values; a person's browser-local manual edits are not part of the admin report.
+
+The directory is read-only. It does not sign in as another person or change their workspace. **My workspace** always opens the signed-in account's own data. There is no payment integration. Apply `20261026000000_admin_directory.sql` after the earlier migrations to enable collection names and metric-availability details; it updates the reporting function without changing existing records or roles.
 
 Browser database access is read-only and protected by row-level security. Backend writes use a separate server-only Supabase client after authentication and authorization. Atomic RPCs are restricted to the service role. Admin access does not expose saved provider keys.
 

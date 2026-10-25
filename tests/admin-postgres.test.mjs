@@ -9,8 +9,9 @@ import {testSupabase} from './helpers/supabase-fixture.mjs';
 const owner='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
 const collection='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',otherCollection='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const page='cccccccc-cccc-4ccc-8ccc-cccccccccccc',otherPage='dddddddd-dddd-4ddd-8ddd-dddddddddddd',emptyPage='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const directoryMigration=readFileSync(new URL('../supabase/migrations/20261026000000_admin_directory.sql',import.meta.url),'utf8');
 class ApiError extends Error{constructor(message,status=400){super(message);this.status=status;}}
-async function fixture(){
+async function fixture({directory=true}={}){
   const sql=new PGlite();
   await sql.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
     create schema auth;
@@ -31,6 +32,8 @@ async function fixture(){
     [page,owner,JSON.stringify(posts),JSON.stringify({requestedMode:'posts',limit:30,complete:true}),JSON.stringify({views:9000,posts:8}),otherPage,other,emptyPage]);
   await sql.query('INSERT INTO public.memberships VALUES ($1,$2,$3),($4,$5,$6),($1,$7,$3)',[collection,page,owner,otherCollection,otherPage,other,emptyPage]);
   await sql.query("INSERT INTO public.settings(owner,api_key,youtube_key) VALUES ($1,'encrypted-secret-api','encrypted-secret-youtube')",[other]);
+  // Upgrade an already populated installation, as existing workspaces will do.
+  if(directory)await sql.exec(directoryMigration);
   const {client,calls:queries}=testSupabase(sql),state={admin:true};
   const database=()=>client;
   const query=async operation=>{const {data,error}=await operation;if(error){const known=error.message.match(/^DD(400|403|404|409):\s*(.+)$/);if(known)throw new ApiError(known[2],Number(known[1]));throw error;}return data;};
@@ -61,7 +64,10 @@ test('PostgreSQL JSONB metrics reject invalid counters, order null refreshes las
     assert.equal(data.items.at(-1).id,emptyPage,'never-refreshed pages sort last');
     const selected=data.items.find(item=>item.id===page);assert.equal(selected.views,300);assert.equal(selected.likes,2);assert.equal(selected.comments,1);assert.equal(selected.shares,1);assert.equal(selected.selectedPostCount,5);
     assert.equal(selected.lifetimeViews,9000);assert.equal(selected.lifetimePosts,8);assert.equal(selected.collectionCount,1);assert.equal(selected.coverage.complete,true);assert.equal(selected.coverage.limit,30);
+    assert.deepEqual(selected.collections,[{id:collection,name:'Owner collection'}]);
+    assert.deepEqual(selected.metricCoverage,{views:{known:2,total:5},likes:{known:1,total:5},comments:{known:2,total:5},shares:{known:1,total:5}});
     const empty=data.items.find(item=>item.id===emptyPage);assert.equal(empty.views,null);assert.equal(empty.selectedPostCount,0);
+    assert.deepEqual(empty.metricCoverage,{views:{known:0,total:0},likes:{known:0,total:0},comments:{known:0,total:0},shares:{known:0,total:0}});
     const text=JSON.stringify(data);for(const secret of ['raw-private-post-identifier','encrypted-secret-api','encrypted-secret-youtube','api_key','youtube_key'])assert.equal(text.includes(secret),false);
     assert.equal(Object.hasOwn(selected,'posts'),false);assert.equal(Object.hasOwn(selected,'settings'),false);
   }finally{await f.close();}
@@ -116,6 +122,74 @@ test('report RPC validates its own parameters and returns null when a metric sum
     ]);
     const {response,data}=await f.get('section=pages&ownerId='+owner);assert.equal(response.status,200);
     const item=data.items.find(item=>item.id===page);assert.equal(item.views,null);assert.equal(item.lifetimeViews,null);assert.equal(item.lifetimePosts,8);
+    assert.deepEqual(item.metricCoverage.views,{known:2,total:2},'overflowed total stays unavailable even when its input counters are known');
     const empty=await f.get('section=users&offset=100');assert.equal(empty.data.total,2);assert.deepEqual(empty.data.items,[]);
+  }finally{await f.close();}
+});
+
+test('page collection details include only actual owner memberships in stable name/id order',async()=>{
+  const f=await fixture();try{
+    const first='10000000-0000-4000-8000-000000000001',second='10000000-0000-4000-8000-000000000002',unrelated='10000000-0000-4000-8000-000000000003';
+    await f.sql.query("INSERT INTO public.collections(id,owner,name) VALUES ($1,$4,'Alpha'),($2,$4,'Alpha'),($3,$4,'Unrelated')",[first,second,unrelated,owner]);
+    await f.sql.query('INSERT INTO public.memberships VALUES ($1,$3,$4),($2,$3,$4)',[second,first,page,owner]);
+    await assert.rejects(f.sql.query('INSERT INTO public.memberships VALUES ($1,$2,$3)',[first,page,owner]),error=>error.code==='23505');
+    await assert.rejects(f.sql.query('INSERT INTO public.memberships VALUES ($1,$2,$3)',[otherCollection,page,owner]),error=>error.code==='23503');
+    const {response,data}=await f.get('section=pages&collectionId='+collection);assert.equal(response.status,200);
+    const item=data.items.find(item=>item.id===page);
+    assert.deepEqual(item.collections,[{id:first,name:'Alpha'},{id:second,name:'Alpha'},{id:collection,name:'Owner collection'}]);
+    assert.equal(item.collectionCount,3,'filtering by one collection still lists all actual memberships');
+    assert.equal(data.collection.ownerId,owner);assert.equal(data.collection.ownerEmail,'Owner@Example.test');
+    const otherResult=await f.get('section=pages&ownerId='+other);
+    assert.deepEqual(otherResult.data.items[0].collections,[{id:otherCollection,name:'Other collection'}]);
+    await f.sql.query('DELETE FROM public.memberships WHERE page_id=$1',[emptyPage]);
+    const withoutMembership=await f.get('section=pages&ownerId='+owner);
+    assert.deepEqual(withoutMembership.data.items.find(item=>item.id===emptyPage).collections,[]);
+  }finally{await f.close();}
+});
+
+test('metric availability distinguishes a known zero from missing or invalid counters',async()=>{
+  const f=await fixture();try{
+    const posts=[
+      {views:0,likes:0,comments:0,shares:0},
+      {views:null,likes:'0',comments:-1,shares:0},
+      {views:'10',likes:0.5,comments:true,shares:9007199254740992},
+      {},
+      {views:-1,likes:9007199254740991,comments:9007199254740991,shares:'0'},
+    ];
+    await f.sql.query('UPDATE public.pages SET posts=$1::jsonb WHERE id=$2',[JSON.stringify(posts),page]);
+    let {response,data}=await f.get('section=pages&ownerId='+owner);assert.equal(response.status,200);
+    let item=data.items.find(item=>item.id===page);
+    assert.equal(item.views,0);assert.equal(item.shares,0);assert.equal(item.likes,9007199254740991);assert.equal(item.comments,9007199254740991);
+    assert.deepEqual(item.metricCoverage,{views:{known:1,total:5},likes:{known:2,total:5},comments:{known:2,total:5},shares:{known:2,total:5}});
+    await f.sql.query('UPDATE public.pages SET posts=$1::jsonb WHERE id=$2',[JSON.stringify([{views:null},{views:-1},{}]),page]);
+    ({data}=await f.get('section=pages&ownerId='+owner));item=data.items.find(item=>item.id===page);
+    assert.equal(item.views,null);assert.deepEqual(item.metricCoverage.views,{known:0,total:3});
+  }finally{await f.close();}
+});
+
+test('directory upgrade preserves saved workspace data and can be applied repeatedly',async()=>{
+  const f=await fixture({directory:false});try{
+    const snapshot=async()=>{
+      const saved={};
+      for(const table of ['users','collections','pages','memberships','settings','usage']){
+        saved[table]=(await f.sql.query('SELECT to_jsonb(t) AS row FROM public.'+table+' t ORDER BY to_jsonb(t)::text')).rows;
+      }
+      return saved;
+    };
+    const before=await snapshot(),oldReport=(await f.get('section=pages')).data;
+    for(let attempt=0;attempt<2;attempt++){
+      await f.sql.exec(directoryMigration);
+      assert.deepEqual(await snapshot(),before);
+      const {response,data}=await f.get('section=pages');assert.equal(response.status,200);
+      assert.deepEqual(data.summary,oldReport.summary);
+      for(const oldItem of oldReport.items){
+        const upgraded=data.items.find(item=>item.id===oldItem.id);
+        const {collections,metricCoverage,...unchanged}=upgraded;
+        assert.deepEqual(unchanged,oldItem,'previous report fields retain their meaning');
+        assert.ok(Array.isArray(collections));assert.ok(metricCoverage);
+      }
+      const privileges=(await f.sql.query("SELECT has_function_privilege('service_role','public.desk_admin_report(uuid,text,integer,integer,text,uuid,uuid)','EXECUTE') AS service, has_function_privilege('authenticated','public.desk_admin_report(uuid,text,integer,integer,text,uuid,uuid)','EXECUTE') AS browser, has_function_privilege('anon','public.desk_admin_report(uuid,text,integer,integer,text,uuid,uuid)','EXECUTE') AS anonymous")).rows[0];
+      assert.deepEqual(privileges,{service:true,browser:false,anonymous:false});
+    }
   }finally{await f.close();}
 });

@@ -13,6 +13,7 @@ Apply these files from `supabase/migrations/` once, in this order, using the Sup
 3. `20261024015000_sdk_admin.sql` — authorized admin queries for the SDK.
 4. `20261024020000_sdk_legacy_import.sql` — the optional import RPC.
 5. `20261025000000_workspace_transfer.sql` - portable record IDs and full workspace export/import with private chunk staging.
+6. `20261026000000_admin_directory.sql` - owner-safe collection names and metric availability in admin page reports.
 
 The SQL Editor may show a potential-issues confirmation for the transfer migration because it defines temporary-transfer cleanup functions containing `DELETE`. This is a query-review warning, not an execution error. The migration backfills only empty portable IDs and enables RLS on both private staging tables, with browser access revoked. Applying it does not delete existing collections or social pages; cleanup functions remove temporary transfer records when invoked.
 
@@ -170,6 +171,8 @@ where id = 'YOUR_VERIFIED_USER_UUID';
 
 Reload `/dashboard`; the admin link appears. `/admin` has People, Collections, and Pages sections with owner details. To revoke access, set the same row's `user_type` to `user`. The server checks the stored role on subsequent requests, and later sign-ins do not overwrite manual role changes. Never assign roles from editable Auth user metadata.
 
+Sign-in and signup offer no admin selection. In the directory, start with People and use their Collections or Pages buttons, then follow collection breadcrumbs. Page details show saved metrics and actual collection names after the sixth migration. The directory is read-only, with no impersonation, account-role editing, or payment controls. My workspace continues to show only the signed-in user's data.
+
 ## 8. Check the real deployment
 
 Use two separate accounts or browser profiles:
@@ -177,7 +180,7 @@ Use two separate accounts or browser profiles:
 1. Signed out: the homepage and login work; `/dashboard` and `/admin` lead to login. `/api/account`, `/api/desk`, and `/api/admin` must reject anonymous requests.
 2. Account A: create a collection, add pages, duplicate it, remove a page from the copy, and reload. Confirm the original remains intact.
 3. Account B: confirm A's pages and collections are absent. A regular user must not open admin data or mutate another user's collection by guessing its ID.
-4. Promote A using SQL: admin lists must show both registered people and the correct owners of their collections/pages. Returning to My workspace must still show only A's own records.
+4. Promote A using SQL: admin lists must show both registered people and the correct owners of their collections/pages. Follow B's Collections into one collection, inspect page details and membership names, and use the breadcrumbs to return. Check mobile navigation and partial versus unavailable metrics. Returning to My workspace must still show only A's own records. Set A back to `user` and confirm the next admin request is denied.
 5. Add a small test provider key and refresh a real page. Confirm views and coverage, missing metrics, a failed refresh preserving prior data, and request-cap feedback. Provider charges may apply.
 6. Hide columns and enter a manual metric. Reload and confirm the preferences and `*` marker persist in that browser. Export CSV and confirm manual flags are present.
 7. Test phone layout, email confirmation, recovery, Google if enabled, and POST sign-out.
@@ -188,7 +191,7 @@ Automated checks validate application logic and database policies in the test en
 
 ### Move between Distribution Desk accounts
 
-Apply the fifth migration above to enable **Import / export** in the dashboard. An existing installation with the original four migrations only needs `20261025000000_workspace_transfer.sql` for this release.
+Apply the fifth migration above to enable **Import / export** in the dashboard. An existing installation with the original four migrations needs `20261025000000_workspace_transfer.sql` for transfers, followed by `20261026000000_admin_directory.sql` for the enhanced admin report. If the transfer migration is already applied, apply only the new admin-directory migration.
 
 In the source account, download a JSON workspace backup. Sign in to the destination account, upload it under **Import backup**, preview the record counts and choose whether to keep existing values or use the backup's values for matching records. Both modes add missing memberships and retain unrelated destination data. Repeated imports use portable identities to prevent duplicate records, and native platform identities allow matching social-page aliases.
 
