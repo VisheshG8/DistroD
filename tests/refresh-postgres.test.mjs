@@ -4,7 +4,8 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {Script} from 'node:vm';
 import {PGlite} from '@electric-sql/pglite';
-import {normalizeScope,scopeKey,snapshotCovers,snapshotMatches,postDates,storedScope} from '../lib/scope.ts';
+import {normalizeScope,scopeKey,snapshotCovers,snapshotMatches,selectPosts,postDates,storedScope} from '../lib/scope.ts';
+import {ProviderError} from '../lib/providers/types.ts';
 import {parsePage} from '../lib/pages.ts';
 import {randomUUID} from 'node:crypto';
 import {testSupabase} from './helpers/supabase-fixture.mjs';
@@ -34,17 +35,21 @@ async function fixture(){
   const state={now:Date.parse('2026-10-24T12:00:00Z'),requestLimit:10,requests:0,timeouts:[],loseLease:false,alias:false,providerMode:'success',beforeRequestMs:0,authUser:{userId:user,email:'user@example.test',displayName:'User',fullName:'User'}};
   const {client:db,calls}=testSupabase(pg);
   class ClockDate extends Date{constructor(...args){super(...(args.length?args:[state.now]));}static now(){return state.now;}}
-  const base={Date:ClockDate,URL,Response,Request,JSON,Number,Math,setTimeout,crypto:{randomUUID},Buffer,TextDecoder,Uint8Array,
+  const base={Date:ClockDate,URL,Response,Request,JSON,Number,Math,AbortController,clearTimeout,setTimeout:(fn,ms)=>{if(ms>=1000)state.timeouts.push(ms);return setTimeout(fn,ms);},crypto:{randomUUID},Buffer,TextDecoder,Uint8Array,
     postDates,scopeKey,storedScope,connectDatabase:()=>db,getCurrentUser:async()=>state.authUser,encryptSecret:value=>'encrypted:'+value,decryptSecret:value=>value||''};
   const server=loadTs('../lib/server.ts',['ApiError','body','database','query','queryRows','encrypt','decrypt','fail','guard','json','owner','pageRecord','preferences','currentAccount','requireAdmin'],base);
-  const context={...base,...server,normalizeScope,scopeKey,snapshotCovers,snapshotMatches,parsePage,
+  const context={...base,...server,ProviderError,normalizeScope,scopeKey,snapshotCovers,snapshotMatches,selectPosts,parsePage,
     preferences:async owner=>({...await server.preferences(owner),request_limit:state.requestLimit}),
     AbortSignal:{timeout:milliseconds=>{state.timeouts.push(milliseconds);return undefined;}},
     fetch:async()=>{state.requests++;if(state.providerMode==='timeout'){state.now+=180001;throw new Error('Timed out');}return Response.json({ok:true});},
-    fetchPage:async(page,settings,request)=>{state.now+=state.beforeRequestMs;await request('https://www.googleapis.com/youtube/v3/channels',{});if(state.loseLease)await pg.query('update public.pages set locked_until=0 where id=$1',[page.id]);return {name:'Refreshed',followers:50,canonicalId:state.alias?'canonical-one':null,
+    getConfiguredKeys:()=>({}),DEFAULT_PROVIDER_ORDER:{youtube:['youtube-official','tikhub'],instagram:['tikhub'],tiktok:['tikhub']},
+    fetchSocialPage:async(page,settings)=>{state.now+=state.beforeRequestMs;await settings.request('youtube-official','https://www.googleapis.com/youtube/v3/channels',{});if(state.loseLease)await pg.query('update public.pages set locked_until=0 where id=$1',[page.id]);return {name:'Refreshed',followers:50,canonicalId:state.alias?'canonical-one':null,
       posts:[{id:'post-one',pageId:page.id,platform:'youtube',publishedAt:'2026-10-23T12:00:00Z',views:100,likes:20,comments:3,shares:null}],
       coverage:{complete:true,hasMore:false,limit:30,fetched:1},overall:{views:1000,posts:1,followers:50},provider:'test'};}};
-  const route=loadTs('../app/api/refresh/route.ts',['POST','maxDuration','runtime'],context);
+  const payload=loadTs('../lib/providers/shared.ts',['checkPayload'],context);
+  const transport=loadTs('../lib/providers/request.ts',['createProviderRequest'],{...context,...payload});
+  const service=loadTs('../lib/refresh-service.ts',['refreshWorkspacePage'],{...context,...transport});
+  const route=loadTs('../app/api/refresh/route.ts',['POST','maxDuration','runtime'],{...context,...service});
   const desk=loadTs('../app/api/desk/route.ts',['GET','POST'],context);
   const post=(pageId=sourceId)=>route.POST(new Request('https://app.test/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pageId,scope})}));
   const mutate=async body=>{const response=await desk.POST(new Request('https://app.test/api/desk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));return {response,body:await response.json()};};

@@ -26,7 +26,7 @@ function harness() {
   const code=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   const exports={};
   const context={exports,URLSearchParams,AbortController,console,
-    require(name){if(name==='react')return hooks;if(name==='@/components/auth/sign-out-button')return {default:props=>React.createElement('button',props,props.children)};return require(name);},
+    require(name){if(name==='react')return hooks;if(name==='@/components/auth/sign-out-button')return {default:props=>React.createElement('button',props,props.children)};if(name==='@/components/admin-record-actions')return {default:()=>null};return require(name);},
     fetch:async url=>{const params=new URL(url,'https://desk.test').searchParams;const section=params.get('section');
       const items=section==='users'?[person]:section==='collections'?[{id:'collection',name:'Saved collection',ownerId:person.id,ownerName:null,ownerEmail:person.email,createdAt:'2026-10-01',pageCount:1}]:[];
       return Response.json({section,items,total:items.length,offset:0,limit:25,hasMore:false,summary});},

@@ -212,6 +212,7 @@ export default function DistributionDashboard({account}:{account:WorkspaceAccoun
       {!loading && !data.collections.length && <p className="side-empty">Start with a creator, a brand, or a group of pages.</p>}
       <button className="new-collection" onClick={() => open("create")} disabled={loading || auth}><Plus size={16}/>New collection</button>
       <div className="sidebar-bottom">
+        <a className="side-link" href="/dashboard"><Layers3 size={18}/><span>Overview &amp; reports</span></a>
         <button className="workspace-backup-card" disabled={loading || auth || !!progress || busy} onClick={() => {setNavOpen(false);setTransfer("export");}}><Archive size={20}/><span><strong>Back up your workspace</strong><small>Take your pages with you</small></span><ChevronRight size={15}/></button>
         <button className="side-link" onClick={() => open("settings")} disabled={loading || auth}><Settings2 size={18}/><span>API settings</span><span className={`connection-dot ${data.settings.hasApiKey || data.settings.hasYoutubeKey ? "connected" : ""}`}/></button>
         {account.userType==="admin"&&<a className="side-link" href="/admin"><ShieldCheck size={18}/><span>Admin directory</span></a>}

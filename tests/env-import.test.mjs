@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import { validateEnvironment, validateSupabaseBackend, validatePublicSecrets } from '../scripts/verify-env.mjs';
 import { validateLegacyExport, importRows } from '../scripts/import-legacy.mjs';
@@ -37,6 +40,56 @@ test('public guard checks every public variable and never prints secret values',
     const result = spawnSync(process.execPath, ['scripts/guard-public-env.mjs'], { cwd: new URL('..', import.meta.url), env: { ...process.env, ...env }, encoding: 'utf8' });
     assert.equal(result.status, 1);
     assert.equal((result.stderr + result.stdout).includes(value), false);
+  }
+});
+
+test('V2 provider keys and scheduled refresh are optional and server-only', () => {
+  const absent = validateEnvironment(environment(), { production: true });
+  assert.deepEqual(absent.errors, []);
+  assert.match(absent.warnings.join(' '), /No shared provider keys/);
+  assert.match(absent.warnings.join(' '), /CRON_SECRET is unset/);
+  const configured = validateEnvironment({ ...environment(), YOUTUBE_API_KEY: 'test-server-key', CRON_SECRET: 'x'.repeat(32) }, { production: true });
+  assert.deepEqual(configured.errors, []);assert.deepEqual(configured.warnings, []);
+  for (const secret of ['short', 'x'.repeat(31), ' ' + 'x'.repeat(32), 'replace-with-a-random-secret-of-sufficient-length']) {
+    assert.match(validateEnvironment({ ...environment(), CRON_SECRET: secret }).errors.join(' '), /CRON_SECRET/);
+  }
+  for (const name of ['HIKERAPI_KEY', 'LAMATOK_KEY', 'YOUTUBE_API_KEY', 'TIKHUB_KEY', 'SCRAPECREATORS_KEY']) {
+    assert.match(validateEnvironment({ ...environment(), [name]: 'replace-with-your-key' }).errors.join(' '), new RegExp(name));
+    assert.match(validatePublicSecrets({ ['NEXT_PUBLIC_' + name]: 'private-provider-value' }).join(' '), /server-only/);
+  }
+  assert.match(validatePublicSecrets({ NEXT_PUBLIC_CRON_SECRET: 'never-public' }).join(' '), /server-only/);
+});
+
+test('environment validation reports V2 configuration without printing provider or cron secrets', () => {
+  const provider = 'private-provider-do-not-print', cron = 'private-short-secret';
+  const result = spawnSync(process.execPath, ['scripts/verify-env.mjs'], { cwd: new URL('..', import.meta.url), env: { ...process.env, ...environment(), YOUTUBE_API_KEY: provider, CRON_SECRET: cron }, encoding: 'utf8' });
+  assert.equal(result.status, 1);assert.match(result.stderr, /CRON_SECRET/);
+  assert.equal((result.stderr + result.stdout).includes(provider), false);assert.equal((result.stderr + result.stdout).includes(cron), false);
+});
+
+test('public guard loads Next environment files with dev/build precedence and process overrides', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'distribution-desk-env-test-'));
+  const script = fileURLToPath(new URL('../scripts/guard-public-env.mjs', import.meta.url));
+  const base = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('NEXT_PUBLIC_') && !['NODE_ENV', 'npm_lifecycle_event', '__NEXT_PROCESSED_ENV'].includes(name)));
+  const run = extra => spawnSync(process.execPath, [script], { cwd: directory, env: { ...base, ...extra }, encoding: 'utf8' });
+  const secret = 'sb_secret_local_fixture_do_not_print';
+  try {
+    await writeFile(path.join(directory, '.env.local'), `NEXT_PUBLIC_SAMPLE=${secret}\n`);
+    let result = run({ npm_lifecycle_event: 'prebuild' });
+    assert.equal(result.status, 1);assert.match(result.stderr, /server credentials/);assert.equal((result.stderr + result.stdout).includes(secret), false);
+    result = run({ npm_lifecycle_event: 'prebuild', NEXT_PUBLIC_SAMPLE: 'public-process-override' });
+    assert.equal(result.status, 0, result.stderr);
+    await writeFile(path.join(directory, '.env.production.local'), 'NEXT_PUBLIC_SAMPLE=public-production-value\n');
+    assert.equal(run({ npm_lifecycle_event: 'prebuild' }).status, 0, 'production-specific file takes precedence over .env.local');
+    assert.equal(run({ npm_lifecycle_event: 'predev' }).status, 1, 'dev must not load the production-specific override');
+    await writeFile(path.join(directory, '.env.development.local'), 'NEXT_PUBLIC_SAMPLE=public-development-value\nNEXT_PUBLIC_HIKERAPI_KEY=private-hiker-fixture\n');
+    result = run({ npm_lifecycle_event: 'predev' });
+    assert.equal(result.status, 1);assert.match(result.stderr, /HIKERAPI_KEY/);assert.equal((result.stderr + result.stdout).includes('private-hiker-fixture'), false);
+    assert.equal(run({ npm_lifecycle_event: 'prebuild' }).status, 0, 'build must not load development-only secrets');
+  } finally {
+    assert.equal(path.dirname(path.resolve(directory)), path.resolve(tmpdir()));
+    assert.ok(path.basename(directory).startsWith('distribution-desk-env-test-'));
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

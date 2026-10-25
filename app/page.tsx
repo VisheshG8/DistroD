@@ -1,5 +1,6 @@
 import { ArrowRight, Check, ChevronRight, Copy, FolderOpen, Layers3, Plus, Camera, Video, Music2, Sparkles } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth";
+import { PRODUCT_NAME } from "@/lib/product";
 import "./home.css";
 
 export const dynamic = "force-dynamic";
@@ -10,8 +11,8 @@ export default async function LandingPage() {
   return <div className="home-shell">
     <div className="home-wrap">
       <header className="home-nav">
-        <a className="home-brand" href="/" aria-label="Distribution Desk home"><span className="home-brand-mark"><Layers3 size={23}/></span><span>Distribution Desk.</span></a>
-        <nav className="home-nav-links" aria-label="Main navigation"><a href="#how-it-works">How it works</a><a className="home-button" href={destination}>{user ? "Open workspace" : "Sign in"}<ArrowRight size={14}/></a></nav>
+        <a className="home-brand" href="/" aria-label={`${PRODUCT_NAME} home`}><span className="home-brand-mark"><Layers3 size={23}/></span><span>{PRODUCT_NAME}.</span></a>
+        <nav className="home-nav-links" aria-label="Main navigation"><a href="/demo">Try the demo</a><a className="home-button" href={destination}>{user ? "Open workspace" : "Sign in"}<ArrowRight size={14}/></a></nav>
       </header>
       <main>
         <section className="home-hero" aria-labelledby="home-title">
@@ -19,12 +20,12 @@ export default async function LandingPage() {
             <div className="home-eyebrow"><span/>One creator. Every page.</div>
             <h1 className="home-title" id="home-title">Your pages.<br/>One <em>clearer</em><br/>picture.</h1>
             <p className="home-hero-description">Collect Instagram, YouTube, and TikTok pages in one place. Group them by creator or brand, and see their numbers together.</p>
-            <div className="home-hero-actions"><a className="home-button home-button-primary" href={destination}>{user ? "Open your workspace" : "Get started"}<ArrowRight size={17}/></a><a className="home-button" href="#how-it-works">See how it works<ChevronRight size={15}/></a></div>
+            <div className="home-hero-actions"><a className="home-button home-button-primary" href={destination}>{user ? "Open your workspace" : "Get started"}<ArrowRight size={17}/></a><a className="home-button" href="/demo">Explore the dashboard<ChevronRight size={15}/></a></div>
             <p className="home-small-note">Start with a collection. Add your pages. Connect a data source when ready.</p>
             <div className="home-platforms" aria-label="Supported platforms"><span><Camera/>Instagram</span><span><Video/>YouTube</span><span><Music2/>TikTok</span></div>
           </div>
           <div className="home-board" aria-label="Illustration of pages grouped into a collection">
-            <div className="home-board-top"><span/>YOUR DISTRIBUTION DESK<Layers3 size={15}/></div>
+            <div className="home-board-top"><span/>YOUR {PRODUCT_NAME.toUpperCase()}<Layers3 size={15}/></div>
             <div className="home-board-title"><FolderOpen size={23}/>One creator’s pages</div>
             <p className="home-board-caption">Different platforms. One collection.</p>
             <div className="home-board-row"><span className="home-board-icon instagram"><Camera size={17}/></span><span>Instagram pages<small>Fan pages &amp; community clips</small></span><Check size={15}/></div>
@@ -44,7 +45,7 @@ export default async function LandingPage() {
         </section>
         <section className="home-bottom" aria-labelledby="home-start-title"><div><h2 id="home-start-title">Bring your first pages together.</h2><p>Choose a post count or publication date range. Available public metrics appear with coverage details, so you can see what the numbers include.</p></div><a className="home-button home-button-primary" href={destination}>{user ? "Open workspace" : "Create your workspace"}<ArrowRight size={17}/></a></section>
       </main>
-      <footer className="home-footer"><span>Distribution Desk.</span><span>Public pages. Organised around your work.</span></footer>
+      <footer className="home-footer"><span>{PRODUCT_NAME}.</span><span>Public pages. Organised around your work.</span></footer>
     </div>
   </div>;
 }

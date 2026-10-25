@@ -8,6 +8,7 @@ export type TransferSummary = {
   collections: number; pages: number; posts: number; collectionsToAdd: number; pagesToAdd: number;
   existingCollections: number; existingPages: number; membershipsToAdd: number;
   collectionNames: string[]; exportedAt: string | null;
+  historyPosts?: number; accountSnapshots?: number; postSnapshots?: number; alerts?: number;
 };
 export type TransferResult = { ok: boolean; summary: TransferSummary; pageMap: TransferMap; collectionMap: TransferMap; preferences: unknown };
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'key' | 'length'>;

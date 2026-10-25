@@ -1,236 +1,138 @@
-# Distribution Desk
+# Distribution Desk V2
 
-Distribution Desk brings Instagram, YouTube, and TikTok pages into one workspace. Group a creator's official accounts, fan pages, clipping channels, or a brand's pages into collections, then compare their available public metrics side by side and as combined totals.
+Distribution Desk tracks public Instagram, TikTok, and YouTube pages in private workspaces. Add a handle or profile URL, record who manages the page and its monthly pay, and compare performance and cost. Social account passwords or account linking are not required.
 
-The application runs on Next.js with Supabase for authentication and PostgreSQL storage. It is configured for deployment on Vercel and uses the Supabase JavaScript SDK over HTTPS for backend data access.
+This release has two roles: **user** and **admin**. Users manage their own pages and collections. Admins inspect all workspaces, assign and manage customer pages, and configure shared data providers. Admin access is assigned only in the database; login and signup do not offer an admin option. Payments, subscriptions, pricing, and the proposed View tier are excluded from the current scope.
 
-## Features
+The main workspace is `P:\VI\distribution-desk`. Start with [START_HERE.md](./START_HERE.md), use [DEPLOYMENT.md](./DEPLOYMENT.md) for Supabase and Vercel setup, and see [VERIFICATION.md](./VERIFICATION.md) for the validation record.
 
-- **Private workspaces:** email/password registration, email confirmation, password recovery, and optional Google sign-in.
-- **Collections:** create, rename, duplicate, and delete groups; add pages in bulk and remove pages from individual collections.
-- **Cross-platform comparison:** followers/subscribers, selected-post views, likes, comments, shares, and post counts, with separate profile lifetime totals where available.
-- **Flexible selections:** choose 1-1,000 recent posts per page or a publication date range, with coverage labels and last-refresh details.
-- **Manual refreshes:** refresh one page or the visible selection, with progress, error feedback, cached snapshots, and a monthly provider request cap.
-- **Reporting:** search, filter by platform, sort pages, choose visible columns, and export the current view as CSV.
-- **Workspace backups:** export every collection, tracked social account, post snapshot, metric and saved view as JSON, then import into another login with a preview and duplicate detection. Large backups transfer in chunks.
-- **Easier navigation:** searchable collections, mobile navigation, 25-row table pagination, and a monthly API usage meter. Totals and CSV exports still cover all matching pages.
-- **Manual metric entries:** edit displayed values; an asterisk (`*`) and CSV flags identify manual values. Overrides and column preferences are saved per account in that browser.
-- **Admin directory:** start with People, then open their Collections or Pages. Follow collection breadcrumbs, expand saved page metrics, and see the collections each page belongs to. Access comes only from the stored database role.
+## What is included
 
-## Tech stack
-
-| Area | Technology |
+| Route | Purpose |
 |---|---|
-| Application | Next.js 16 App Router, React 19, TypeScript |
-| Styling and icons | Tailwind CSS 4, custom CSS, Lucide |
-| Authentication | Supabase Auth with server-side session handling |
-| Database | Supabase PostgreSQL, row-level security, and server-only RPCs |
-| Data providers | TikHub, ScrapeCreators, optional YouTube Data API v3 |
-| Hosting and runtime | Vercel, Node.js 22.x |
-| Verification | TypeScript, Node.js test runner, PostgreSQL integration tests using PGlite |
+| `/demo` | Synthetic demonstration data; no provider keys or real workspace changes |
+| `/dashboard` | Overview, page management/detail, performance, posts, economics, monthly reports, and alerts |
+| `/collections` | Collections, bulk page entry, manual metric entries, saved views, and full workspace import/export |
+| `/admin` | People, their collections and pages, customer page assignment, and page management |
+| `/admin/providers` | Provider/fallback order, request limits, estimated spend, scheduling, and failed fetches |
+| `/login` | Email/password registration, password or emailed-link sign-in, recovery, and optional Google |
 
-Exact dependency versions are in [package.json](./package.json) and [package-lock.json](./package-lock.json).
+- Date presets cover Today, 7/30/90 days, This month, Last month, and custom dates. Compare a range with a previous or custom range.
+- Page details include monthly pay, editor/responsible person, start date, active status, and notes. Pausing keeps history and stops scheduled refreshes.
+- Analytics show recorded view gains, followers and growth, posts published, typical performance, platform-specific rankings, health score breakdowns, and prorated costs.
+- Reports export to CSV. The monthly report can be printed or saved as PDF through the browser print dialog.
+- Shared provider caching avoids fetching the same public account separately for each customer. Owner-specific metadata and imported history remain private.
+- Full backups move collections, details, cumulative posts, recorded history, alerts, and browser preferences between accounts. Existing version-1 backups still work.
+
+## How to read the numbers
+
+**History begins when observations are saved.** A first fetch imports available posts and their current counts; it cannot recover past follower counts or a post's earlier views. The first fetch asks for up to 100 posts. Larger selections can be fetched from Collections, subject to provider pagination, scope, and request limits. This is not an unlimited historical backfill.
+
+The default **views gained** metric measures changes between actual observations in the selected range. **Views of posts published in range** uses the latest saved counts of those posts. Missing boundaries and incomplete coverage are labelled. Daily chart points describe changes between observations ending on that date; gaps are not filled with invented values.
+
+Typical views, engagement, hit rate, consistency, performance alerts, and health use a saved observation at **7–8 days of post age**. Younger posts are marked maturing. Older posts imported today may never have a comparable day-seven observation. Health scores need at least eight comparable matured posts and enough data for their components. Expect a warm-up period after tracking starts. Rankings and engagement comparisons stay within each platform.
+
+Account samples keep the first observation per UTC day. Post samples are captured daily through day 30, then at least seven days apart through day 90; older posts retain an initial observation. Capture occurs when the post is returned by a successful fetch, so posts outside the fetched recent-post window can have gaps. Display ranges use India time.
+
+Unavailable metrics remain unavailable, including public Instagram saves and reach. A real zero is shown as zero. Alerts require a condition on two distinct daily checks and suppress rapid repeats.
+
+Page pay is a reporting field in INR. The **current monthly rate** is prorated using each month's actual calendar days, the configured start date, and dates no later than today. Past rate changes and historical active/inactive periods are not reconstructed. Pausing tracking does not create a historical pay stop date. The app does not collect or pay money.
 
 ## Local setup
 
-You need Node.js **22.x**, npm, and a Supabase project. Use a separate Supabase project for development, or configure a local stack with [supabase/config.toml](./supabase/config.toml).
-
-### 1. Install dependencies
-
-Open PowerShell in the main workspace:
+Use Node.js **22.x**, npm, and a separate Supabase development project. Backend data access uses the Supabase SDK over HTTPS; a PostgreSQL connection string is not needed.
 
 ```powershell
 Set-Location 'P:\VI\distribution-desk'
 npm ci
+# New installation only; preserve an existing .env.local.
+Copy-Item .env.example .env.local
 ```
 
-### 2. Initialize Supabase
+For an existing installation, keep `.env.local` and its current keys, especially `APP_ENCRYPTION_KEY`; add only missing variables from the example. Fill in configuration and apply the migration sequence in [DEPLOYMENT.md](./DEPLOYMENT.md). Existing databases need **only missing migrations, once, in filename order**. If the first six are applied, add only `20261026010000_analytics_history.sql`, `20261026015000_analytics_operations.sql`, and `20261026020000_analytics_transfer.sql`. A fresh database needs all nine. Do not rerun the initial schema or edit an already-applied migration.
 
-Apply the migrations once, in this order, through the Supabase SQL Editor or the Supabase CLI migration workflow:
-
-| Migration | Purpose |
-|---|---|
-| [20261024000000_init.sql](./supabase/migrations/20261024000000_init.sql) | Tables, Auth profile trigger, and browser access policies |
-| [20261024010000_sdk_operations.sql](./supabase/migrations/20261024010000_sdk_operations.sql) | Atomic collection, page, request-accounting, and refresh operations |
-| [20261024015000_sdk_admin.sql](./supabase/migrations/20261024015000_sdk_admin.sql) | Admin directory queries with stored-role authorization |
-| [20261024020000_sdk_legacy_import.sql](./supabase/migrations/20261024020000_sdk_legacy_import.sql) | Atomic import validation for workspace restoration and legacy imports |
-| [20261025000000_workspace_transfer.sql](./supabase/migrations/20261025000000_workspace_transfer.sql) | Portable record identities and private, chunked workspace backup/import operations |
-| [20261026000000_admin_directory.sql](./supabase/migrations/20261026000000_admin_directory.sql) | Collection names and metric availability in the admin directory |
-
-For an existing database, apply only migrations that have not already run. The application tables are `users`, `collections`, `pages`, `memberships`, `settings`, and `usage` in the `public` schema.
-
-Enable the Email provider in Supabase Auth. For local development, set the Site URL to `http://localhost:3000` and allow `http://localhost:3000/auth/callback` as a redirect URL. Email confirmation and password recovery also use the app's Auth routes. See [DEPLOYMENT.md](./DEPLOYMENT.md) for email templates, SMTP, Google OAuth, and production Auth configuration.
-
-### 3. Configure environment variables
-
-Create `.env.local` in the project root, or update your existing one, with your project values. Use the template below and replace every placeholder:
-
-```dotenv
-NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_REPLACE_ME
-SUPABASE_SECRET_KEY=sb_secret_REPLACE_ME
-APP_ENCRYPTION_KEY=YOUR_BASE64_ENCODED_32_BYTE_KEY
-
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-NEXT_PUBLIC_ENABLE_GOOGLE_AUTH=false
-```
-
-| Variable | Purpose |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project API origin |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public key used by browser and Auth clients |
-| `SUPABASE_SECRET_KEY` | Server-only key for authorized backend operations |
-| `APP_ENCRYPTION_KEY` | Server-only key used to encrypt saved provider API keys with AES-256-GCM |
-| `NEXT_PUBLIC_APP_URL` | Full application origin, including `http://` locally or `https://` in production; no path |
-| `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH` | Set to `true` after configuring Google in Supabase Auth; otherwise `false` |
-
-Legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are supported as fallbacks for the public and server keys respectively. **A `DATABASE_URL` is not required** by the app or importer.
-
-Generate `APP_ENCRYPTION_KEY` once with:
-
-```sh
-node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
-```
-
-Keep this key stable and backed up across deployments. Changing it makes existing encrypted provider keys unreadable unless they are re-encrypted or entered again. Keep all server secrets out of Git and `NEXT_PUBLIC_*` variables.
-
-Next.js also loads `.env`, but the `check:env` and `import:legacy` commands explicitly load `.env.local`. Use `.env.local` for local configuration so those commands see the same values as the application.
-
-### 4. Validate and start
-
-```sh
+```powershell
 npm run check:env
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The environment check validates required values and formats without printing secrets; it does not verify Supabase connectivity, migrations, or Auth provider setup.
+Open `http://localhost:3000/demo` for the demonstration or `/login` for a real workspace. Configure Supabase Auth callback URLs before testing confirmation and recovery. The development server binds to `127.0.0.1`; use the configured `localhost` origin for Auth callbacks.
 
-## Using the workspace
+Existing users can choose **Email me a sign-in link**. Open that email in the same browser that requested it so the PKCE flow can complete; new users register first. Password and Google sign-in remain available when configured.
 
-1. Register and confirm your email, or sign in with Google if enabled.
-2. Create a collection named after a creator, brand, or another group you want to track.
-3. Add public profile URLs or handles. Bulk entry accepts one per line or comma-separated entries; choose the platform for bare handles.
-4. Open **API settings**, select TikHub or ScrapeCreators, and save your own provider key. You can also add a YouTube Data API key for YouTube channels.
-5. Choose a recent-post count or publication date range, then refresh the pages.
-6. Compare totals, review coverage, customize visible columns, and export CSV when needed.
+## Environment variables
 
-You can organize pages before connecting a provider. Fetching metrics requires the appropriate key. Provider keys are encrypted before database storage and are excluded from workspace, admin, and CSV responses.
+Copy [.env.example](./.env.example). Only variables beginning with `NEXT_PUBLIC_` may be exposed to the browser.
 
-The current limits are **100 collections**, **500 unique pages per user**, and **100 entries per bulk-add request**. The monthly request cap is configurable from **10 to 2,500** calls, with a default of **500**. It counts provider request attempts, including retries; provider charges and quotas are separate from application hosting.
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project API origin |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable key; legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` is supported |
+| `NEXT_PUBLIC_APP_URL` | Application origin; HTTPS in production |
+| `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH` | `false` unless Google is configured in Supabase |
+| `SUPABASE_SECRET_KEY` | Server-only secret; legacy `SUPABASE_SERVICE_ROLE_KEY` is supported |
+| `APP_ENCRYPTION_KEY` | Stable 32-byte base64 key for encrypted workspace provider keys |
+| `HIKERAPI_KEY` | Shared Instagram provider key |
+| `LAMATOK_KEY` | Shared TikTok provider key |
+| `YOUTUBE_API_KEY` | Official YouTube Data API v3 key |
+| `TIKHUB_KEY` / `SCRAPECREATORS_KEY` | Optional fallback keys |
+| `CRON_SECRET` | Random server-only token, at least 32 characters, for scheduled refresh |
 
-## Understanding the numbers
+All provider keys are server-only. Admin settings change order and limits, not secret values. If shared providers are unavailable, Collections retains encrypted personal provider settings for manual refresh. Those requests are labelled workspace-funded and do not consume the shared estimated-dollar budget. Scheduled refresh requires shared keys.
 
-- **Publication ranges:** dates select posts published within the chosen range, using India calendar dates. The displayed counts are those posts' lifetime counters as of the last successful refresh. For example, selecting October shows counters on October-published posts, not views gained during October.
-- **Coverage:** providers may return partial data or omit counters and dates. A dash means unavailable; totals add available values, and coverage labels show whether a selection is complete.
-- **Profile totals:** lifetime views and post counts are separate from selected-post totals. Automatic lifetime view totals are available for YouTube; Instagram and TikTok do not supply public account lifetime view totals through these adapters.
-- **YouTube uploads:** selections can include both Shorts and other public videos. The official API does not expose public share counts. With TikHub alone, use a `/channel/UC...` URL; add a YouTube Data API key to resolve `@handles`.
-- **Shared pages:** a page's saved snapshot is reused across its collections within the same user's workspace. Duplicating a collection creates a separate page list; it does not create independent snapshots. All pages counts each saved page once.
-- **Audience totals:** follower/subscriber counts are added across pages; audiences can overlap, so the sum is not a count of unique people.
-- **Manual entries:** overrides affect displayed totals and CSV exports, retain the `*` marker, and leave stored provider snapshots intact. They are browser-local and do not sync across devices.
-- **Refresh behavior:** refreshes are initiated in the UI and run page by page. Matching snapshots less than five minutes old may be reused. Failed refreshes preserve the last successful snapshot; background scheduled collection is not implemented.
+There is no `ADMIN_EMAILS` role bootstrap or payment-provider configuration. Sign up normally, verify the account, then change that exact `public.users` row as described in [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+## Providers, refreshes, and costs
+
+Fetches use `lib/social-provider.ts` and the shared refresh service. Adapters cover official YouTube, HikerAPI, LamaTok, TikHub, and ScrapeCreators. The database chooses the ordered provider list; unconfigured adapters are skipped. The request boundary handles timeouts, one retry with backoff, pacing, response limits, request reservations, and logs. Official YouTube uses uploads playlists and video endpoints rather than search queries.
+
+The default shared budget is **$25/month estimated**, with a 25,000-request cap. HikerAPI and LamaTok default to **$0.02/request** conservatively. Set the actual rates for your purchased tier in `/admin/providers`. Reserved attempts count toward the estimate; it is not a vendor invoice or a guarantee of the final bill. Hosting, Supabase, taxes, prepaid deposits, and personal provider keys are separate.
+
+Assuming two requests per unique paid-provider account per day for 30 days:
+
+| Unique accounts | Requests/month | At $0.001/request | At $0.02/request |
+|---:|---:|---:|---:|
+| 50 | 3,000 | $3 | $60 |
+| 150 | 9,000 | $9 | $180 |
+| 300 | 18,000 | $18 | $360 |
+
+Initial imports, pagination, retries, and fallback calls add requests. Two requests daily is a planning assumption. The $25 budget cannot sustain these workloads at the entry rate: scheduling slows near the caps and stops spending at the cap. Confirm your tier before enabling it. Vendor references checked for this release: [HikerAPI tier rates](https://hikerapi.com/help/affiliate) and [LamaTok pricing](https://lamatok.com/tiktok-api).
+
+**Scheduled refresh is paused by default in the database.** `vercel.json` invokes `/api/cron/refresh` hourly at minute 17; each account is checked against its configured interval, initially 24 hours. Hourly cron needs a supporting Vercel plan. [Hobby permits only daily cron](https://vercel.com/docs/cron-jobs/usage-and-pricing), so change/remove the cron entry or use an authenticated external scheduler before deploying there. See [DEPLOYMENT.md](./DEPLOYMENT.md) for enablement and bounded-work limits.
 
 ## Move a workspace to another account
 
-1. In the source account, choose **Import / export** in the top bar, then **Download workspace**. This downloads a `.json` backup of the entire workspace, regardless of the current collection, filters or table page.
-2. Sign in with the destination account, choose **Import / export → Import backup**, and select the file.
-3. Choose **Preview import**. Review the collection, social-page and post counts, and see how many records already exist in the destination.
-4. Choose **Keep my existing values** to add missing records, or **Use the backup's values** to update matching collection names, page snapshots and manual metric entries. Unrelated records are retained in both modes.
-5. Optionally restore provider choice and refresh limits, then choose **Import workspace**.
+1. In the source account, open **Collections & backups → Import / export** and download the JSON backup.
+2. Sign into the destination account, upload it, and review page, collection, history, and alert counts.
+3. Keep existing values or overwrite matching values. Both choices add missing records and retain unrelated destination data.
 
-Backups include page names, handles, native platform identities, posts, counters, coverage, last-refresh timestamps, collection memberships, browser-local manual entries, visible columns and saved post/date selections. View preferences come from the browser performing the export. Imports remap record IDs to the destination user and preserve page-to-collection and post-to-page links. Reimporting the same backup does not create duplicate collections or pages.
+Imports remap owners and references. Portable identities make retries and repeated imports safe. Apply is one database transaction, including metadata and history. The format stays `distribution-desk.workspace`, version `1`, with an optional versioned analytics section.
 
-API keys, passwords, login sessions, roles and monthly request usage are not transferred. Provider keys must be configured in the destination account for future refreshes. Restoring a different provider choice clears the destination's old social-provider key; usage counters are never reset. Exports preserve the latest stored snapshot, not a historical series of refreshes.
+Backups exclude Auth accounts, roles, keys, global provider settings, request logs, usage counters, and the shared cache. Re-enter personal keys separately. Browser preferences and manual values restore in the importing browser; they do not replace the saved observations used by analytics.
 
-Backups can be up to **100 MB**, including view preferences. The server snapshot is limited to 98 MB to reserve room for those preferences. Transfers use 512 KB binary chunks, with private staging that expires after one hour and is removed on subsequent transfer operations. Validation and final restore run on the server; applying an import is one database transaction, and retrying a committed import is safe.
+Transfers use 512 KB chunks, a 100 MB upload limit, and a 98 MB server snapshot limit. Temporary jobs expire after one hour. Keep downloaded backups securely; transfer staging is not permanent storage. The older owner-mapped CLI importer remains available; use the full workspace backup flow for V2 history and preferences.
 
-For existing installations, apply **`20261025000000_workspace_transfer.sql`** before using these controls. The original four migrations must already be present. CSV exports remain available for reporting and cannot be used as workspace backups.
+## Development
 
-## Accounts and admin access
-
-| Route | Access |
-|---|---|
-| `/` and `/login` | Public homepage and authentication |
-| `/dashboard` | Signed-in user's own workspace |
-| `/reset-password` | Authenticated password recovery |
-| `/api/account`, `/api/desk`, `/api/refresh` | Authenticated backend operations with ownership checks |
-| `/api/transfer` | Owner-bound workspace backups, validation, and imports |
-| `/admin` and `/api/admin` | Stored `public.users.user_type = 'admin'` role |
-
-New accounts start as `user`. To create the first admin, register, sign in, and identify your verified account's UUID in `public.users`. Then run the following in the Supabase SQL Editor, replacing the placeholder with that exact UUID:
-
-```sql
-update public.users
-set user_type = 'admin'
-where id = 'YOUR_VERIFIED_USER_UUID';
-```
-
-Reload the dashboard to see the Admin link. Set the role back to `user` to revoke access. Role assignment is controlled in the database; editable Auth metadata cannot grant admin access.
-
-Everyone uses the same sign-in and account-creation screens, with no admin option or role selector. The admin directory opens on **People**. Choose **Collections** or **Pages** beside a person, then open a collection to inspect its pages. Breadcrumbs keep the owner in view. Expand a page's details to see its saved metrics, refresh time, and collection names. Partial metric totals identify how many saved posts supplied the count. These are saved provider values; a person's browser-local manual edits are not part of the admin report.
-
-The directory is read-only. It does not sign in as another person or change their workspace. **My workspace** always opens the signed-in account's own data. There is no payment integration. Apply `20261026000000_admin_directory.sql` after the earlier migrations to enable collection names and metric-availability details; it updates the reporting function without changing existing records or roles.
-
-Browser database access is read-only and protected by row-level security. Backend writes use a separate server-only Supabase client after authentication and authorization. Atomic RPCs are restricted to the service role. Admin access does not expose saved provider keys.
-
-## Deploy to Vercel
-
-1. Apply all required Supabase migrations and configure Auth providers and production email delivery.
-2. Import the repository into Vercel with the **Next.js** preset, **Node.js 22.x**, install command `npm ci`, and build command `npm run build`.
-3. Set the application variables in Vercel. Use the complete production HTTPS origin for `NEXT_PUBLIC_APP_URL`, for example `https://your-app.vercel.app`.
-4. Set Supabase's Site URL to that origin and allow its exact `/auth/callback` URL. Configure preview deployments separately when needed.
-5. Validate the intended production environment with `npm run check:env -- --production`, run the checks below, and deploy. Rebuild after changing public variables.
-6. Test registration, confirmation, recovery, workspace isolation with two accounts, admin access, provider refreshes, and CSV exports on the hosted app.
-
-The refresh route declares a 300-second maximum duration; verify the deployment supports it. The full configuration and hosted smoke checks are in [DEPLOYMENT.md](./DEPLOYMENT.md). Local checks do not establish that a production deployment or external providers are configured correctly.
-
-## Development commands
-
-| Command | Purpose |
-|---|---|
-| `npm ci` | Install dependencies from the committed lockfile |
-| `npm run dev` | Start the local Next.js development server |
-| `npm run check:env` | Validate local environment variable formats |
-| `npm run check:env -- --production` | Validate required production configuration |
-| `npm run typecheck` | Check TypeScript types |
-| `npm test` | Run application and PostgreSQL regression tests |
-| `npm run build` | Create the production build |
-| `npm start` | Serve an existing production build |
-| `npm run import:legacy -- --help` | Show legacy import options |
-
-Before deploying application changes, run:
-
-```sh
+```powershell
 npm run typecheck
 npm test
 npm run build
 ```
 
-The GitHub Actions workflow runs these checks after installing dependencies. See [VERIFICATION.md](./VERIFICATION.md) for the recorded verification scope and hosted checks still required.
+The stack is Next.js App Router, React, strict TypeScript, Tailwind/custom CSS, Lucide, Supabase Auth/PostgreSQL, and SVG charts. Tests use Node's runner and PGlite with actual migrations and the Supabase SDK. Dependencies and scripts are in [package.json](./package.json).
 
-## Import existing records
+The V2 verification record includes 202 passing integrated tests, four additional passing rendering/CSV regressions, and a successful production webpack build. See [VERIFICATION.md](./VERIFICATION.md) for the exact runs and hosted checks still needed.
 
-The optional [legacy importer](./scripts/import-legacy.mjs) maps old owner IDs to existing Supabase Auth user IDs and preserves collection/page IDs, memberships, cached snapshots, and refresh timestamps. Create the target accounts first and prepare an authorized export plus an owner map using the format in [DEPLOYMENT.md](./DEPLOYMENT.md).
+For a repeatable developer fixture, run `node scripts/seed-demo.mjs --output ./demo-data.json --now 2026-10-25T12:00:00Z`. Omitting `--output` prints JSON. Existing output files are rejected. This generates a synthetic `AnalyticsDataset` locally without keys, network calls, or database writes; it is **not an importable workspace backup**. `/demo` uses the same generator automatically without a seed step. Keep generated fixtures outside commits unless they are intentional test assets.
 
-```sh
-npm run import:legacy -- --file workspace-export.json --owners owner-map.json --validate-only
-npm run import:legacy -- --file workspace-export.json --owners owner-map.json
-npm run import:legacy -- --file workspace-export.json --owners owner-map.json --apply
-```
+To add a provider, implement `SocialDataProvider` in `lib/providers/types.ts`, normalize unsupported fields to `null`, and send every request through the supplied request function. Register platform support, server key mapping, allowed host, and admin order/cost options. Add fixture contract tests for pagination, missing metrics, failures, and limits. Features and jobs continue to use the shared service.
 
-The first command validates files locally. The second checks the target through Supabase and reports a dry run. Only `--apply` writes records, in one transaction; existing records are not overwritten. Accounts, roles, provider keys, settings, usage, and browser preferences are not transferred.
+**No live Supabase migration or Vercel deployment was performed for these local changes.** Real provider requests, Auth delivery, and hosted jobs still need smoke tests with the owner's services.
 
-## Project structure
+## Deliberate limits
 
-| Path | Contents |
-|---|---|
-| `app/` | Homepage, dashboard, admin page, authentication routes, API routes, and styles |
-| `components/` | Workspace dashboard, admin directory, and Auth forms |
-| `lib/` | Identity checks, Supabase clients, encryption, provider adapters, metric display, and selection logic |
-| `public/` | Static assets |
-| `scripts/` | Environment validation, public-secret build guard, and legacy importer |
-| `supabase/migrations/` | Versioned schema, access policies, and backend RPCs |
-| `supabase/tests/` | SQL access-policy checks |
-| `tests/` | Application and PostgreSQL regression tests |
-| `.github/workflows/ci.yml` | Automated typecheck, test, and build workflow |
-| `DEPLOYMENT.md` | Detailed setup, operations, data import, and troubleshooting |
-| `vercel.json` | Vercel framework and install/build commands |
+- No payments, plan gating, View tier, pricing page, or user impersonation.
+- Optional daily email summaries, WhatsApp delivery, and matching source videos across pages are not implemented. `source_asset_id` is reserved and preserved for later matching.
+- Adding a page saves it and attempts an immediate fetch; there is no separate profile-confirmation preview before saving.
+- The demo is an isolated synthetic dataset, not a script that seeds customers into production.

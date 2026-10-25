@@ -1,6 +1,7 @@
 "use client";
 
 import SignOutButton from "@/components/auth/sign-out-button";
+import AdminRecordActions from "@/components/admin-record-actions";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, FileStack, Folder, Layers3, Loader2, LogOut, RefreshCw, Search, ShieldCheck, Users, X } from "lucide-react";
 
@@ -145,6 +146,7 @@ export default function AdminDashboard({ account }: { account: Account }) {
       </tr>
       {expanded && <tr className="adm-details-row"><td colSpan={8}><section id={detailId} className="adm-page-details" aria-label={"Saved metrics for " + (row.name || row.handle)}>
         <div className="adm-details-heading"><div><h3>{row.name || row.handle}</h3><p>Last refreshed: {row.lastSyncedAt ? date(row.lastSyncedAt, true) : "Not refreshed"}</p></div>
+          <AdminRecordActions ownerId={row.ownerId} label={row.ownerName || row.ownerEmail || row.ownerId} pageId={row.id} pageName={row.name || row.handle} onDone={() => setRevision(value => value + 1)} />
           {/^https:\/\//i.test(row.url) && <a href={row.url} target="_blank" rel="noopener noreferrer" className="adm-button">Open on {platform(row.platform)}<ArrowUpRight size={14} /></a>}
         </div>
         <div className="adm-metric-groups">
@@ -179,11 +181,11 @@ export default function AdminDashboard({ account }: { account: Account }) {
       <nav aria-label="Admin sections">{sections.map(key => {
         const Icon = key === "pages" ? FileStack : key === "collections" ? Folder : Users;
         return <button key={key} className={section === key ? "active" : ""} onClick={() => chooseSection(key)} aria-current={section === key ? "page" : undefined}><Icon size={18} /><span>{labels[key]}</span><small>{number(key === "pages" ? summary?.pages : key === "collections" ? summary?.collections : summary?.users)}</small></button>;
-      })}</nav>
+      })}<a href="/admin/providers" className="adm-provider-link"><ShieldCheck size={18}/><span>Providers &amp; refresh</span></a></nav>
       <div className="adm-sidebar-bottom"><a href="/dashboard"><ArrowLeft size={16} />My workspace</a><SignOutButton className="adm-signout"><LogOut size={16} />Sign out</SignOutButton><div className="adm-profile"><span>{initials(displayName)}</span><div><strong>{displayName}</strong><small>{account.email}</small></div></div></div>
     </aside>
     <main className="adm-main">
-      <header className="adm-topbar"><div>Administration<span>/</span><strong>{labels[section]}</strong></div><span className="adm-private"><ShieldCheck size={13} />ADMIN ACCESS</span></header>
+      <header className="adm-topbar"><div>Administration<span>/</span><strong>{labels[section]}</strong></div><a href="/admin/providers" className="adm-button"><ShieldCheck size={13} />Data sources</a></header>
       <div className="adm-content">
         <div className="adm-heading"><div><span className="adm-eyebrow">ALL ACCOUNTS, ONE DIRECTORY</span><h1>Workspace directory<span>.</span></h1><p>Find a person, open their collections, and inspect the pages they track.</p></div><a href="/dashboard" className="adm-button">My workspace<ArrowUpRight size={15} /></a></div>
         <div className="adm-stats">{cards.map(item => <button className="adm-stat" key={item.name} onClick={() => chooseSection(item.section)} aria-label={"Browse all " + labels[item.section].toLowerCase()}><div><span>{item.name}</span><item.icon size={19} /></div><strong>{number(item.value)}</strong><small>{item.detail}</small></button>)}</div>
@@ -197,6 +199,7 @@ export default function AdminDashboard({ account }: { account: Account }) {
               <li><ChevronRight size={13} aria-hidden="true" />{collectionFilter ? <><button onClick={() => chooseOwnerSection("collections")}>Collections</button><ChevronRight size={13} aria-hidden="true" /><span aria-current="page">{collectionFilter.label}</span></> : <span aria-current="page">{labels[section]}</span>}</li>
             </ol></nav>
             <div className="adm-context-heading"><div><strong>{ownerFilter.label}</strong>{ownerFilter.email && ownerFilter.email !== ownerFilter.label && <span>{ownerFilter.email}</span>}<small>Account ID: {ownerFilter.id}</small></div><button className="adm-clear" aria-label="All accounts: clear account filter" onClick={() => chooseSection(section)}><X size={14} />All accounts</button></div>
+            <AdminRecordActions ownerId={ownerFilter.id} label={ownerFilter.label} onDone={() => setRevision(value => value + 1)} />
             <div className="adm-context-tabs" aria-label="Selected account records"><button className={section === "collections" ? "active" : ""} aria-pressed={section === "collections"} onClick={() => chooseOwnerSection("collections")}><Folder size={14} />Collections</button><button className={section === "pages" && !collectionFilter ? "active" : ""} aria-pressed={section === "pages" && !collectionFilter} onClick={() => chooseOwnerSection("pages")}><FileStack size={14} />All pages</button>{collectionFilter && <span>Pages in <strong>{collectionFilter.label}</strong></span>}</div>
           </div>}
           <form className="adm-toolbar" onSubmit={event => { event.preventDefault(); setSearch(query.trim()); setOffset(0); }}>

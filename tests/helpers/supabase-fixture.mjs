@@ -11,7 +11,7 @@ export function testSupabase(pg,{beforeRpc}={}){
   const transport=async(input,init={})=>{
     const request=input instanceof Request?input:new Request(input,init),url=new URL(request.url);
     const table=url.pathname.replace(/^\/rest\/v1\//,''),headers=new Headers(request.headers),method=request.method;
-    calls.push({method,path:url.pathname,search:url.search,body:method==='GET'||method==='HEAD'?null:await request.clone().json()});
+    calls.push({method,path:url.pathname,search:url.search,body:request.body?await request.clone().json():null});
     try{
       if(table.startsWith('rpc/')){
         const name=table.slice(4),args=await request.json();

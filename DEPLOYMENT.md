@@ -1,23 +1,26 @@
-# Deploy Distribution Desk on Supabase and Vercel
+# Deploy Distribution Desk V2
 
-This application uses standard Next.js, Supabase Auth, and Supabase PostgreSQL through the JavaScript SDK and HTTPS APIs. The source includes the schema and deployment configuration. The hosting accounts, project credentials, Auth providers, and production email service must be configured in your own accounts. The application and import script do not require a direct PostgreSQL connection string.
+The app uses Next.js, Supabase Auth/PostgreSQL, and the Supabase SDK over HTTPS. No direct database connection string is needed by the app or importer. This guide describes setup to perform in your own accounts; **the local implementation work has not applied production SQL or deployed to Vercel**.
 
-## 1. Create the Supabase database
+## 1. Apply database migrations
 
-Create a fresh Supabase project, preferably in a region close to your expected users and Vercel function region.
+For a new Supabase project, run all nine files once, in this order. For an existing installation, run only the files that have not already been applied.
 
-Apply these files from `supabase/migrations/` once, in this order, using the Supabase SQL Editor:
+**Upgrading an installation with the first six migrations already applied:** run only `20261026010000_analytics_history.sql`, then `20261026015000_analytics_operations.sql`, then `20261026020000_analytics_transfer.sql`.
 
-1. `20261024000000_init.sql` — tables, identity trigger, and browser access policies.
-2. `20261024010000_sdk_operations.sql` — atomic workspace and refresh operations for the SDK.
-3. `20261024015000_sdk_admin.sql` — authorized admin queries for the SDK.
-4. `20261024020000_sdk_legacy_import.sql` — the optional import RPC.
-5. `20261025000000_workspace_transfer.sql` - portable record IDs and full workspace export/import with private chunk staging.
-6. `20261026000000_admin_directory.sql` - owner-safe collection names and metric availability in admin page reports.
+| Order | Migration | Purpose |
+|---:|---|---|
+| 1 | [20261024000000_init.sql](./supabase/migrations/20261024000000_init.sql) | Users, workspaces, Auth trigger, and row-level security |
+| 2 | [20261024010000_sdk_operations.sql](./supabase/migrations/20261024010000_sdk_operations.sql) | Atomic collection/page operations and request accounting |
+| 3 | [20261024015000_sdk_admin.sql](./supabase/migrations/20261024015000_sdk_admin.sql) | Stored-role admin directory queries |
+| 4 | [20261024020000_sdk_legacy_import.sql](./supabase/migrations/20261024020000_sdk_legacy_import.sql) | Atomic legacy import validation and apply |
+| 5 | [20261025000000_workspace_transfer.sql](./supabase/migrations/20261025000000_workspace_transfer.sql) | Portable identities and chunked workspace backups |
+| 6 | [20261026000000_admin_directory.sql](./supabase/migrations/20261026000000_admin_directory.sql) | Collection membership names and admin metric availability |
+| 7 | [20261026010000_analytics_history.sql](./supabase/migrations/20261026010000_analytics_history.sql) | Page metadata, history, alerts, shared cache, and provider operations |
+| 8 | [20261026015000_analytics_operations.sql](./supabase/migrations/20261026015000_analytics_operations.sql) | Owner-safe page creation/assignment and metadata operations |
+| 9 | [20261026020000_analytics_transfer.sql](./supabase/migrations/20261026020000_analytics_transfer.sql) | Metadata/history/alert backup and restore, compatible with old backups |
 
-The SQL Editor may show a potential-issues confirmation for the transfer migration because it defines temporary-transfer cleanup functions containing `DELETE`. This is a query-review warning, not an execution error. The migration backfills only empty portable IDs and enables RLS on both private staging tables, with browser access revoked. Applying it does not delete existing collections or social pages; cleanup functions remove temporary transfer records when invoked.
-
-For an existing project that already has the initial schema, apply only the later migrations that have not been applied. Alternatively, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), link this directory to your project, and use its migration workflow:
+Use the SQL Editor, or a consistently tracked Supabase CLI migration workflow:
 
 ```sh
 supabase login
@@ -25,135 +28,76 @@ supabase link --project-ref YOUR_PROJECT_REF
 supabase db push
 ```
 
-Use one migration workflow consistently. Do not rerun the initial SQL against an already initialized database or edit an applied migration. Add a new migration for later schema changes. If using an existing project, review its current tables before applying this schema; `public.users`, `collections`, `pages`, `memberships`, `settings`, and `usage` are application-owned names.
+If earlier files were applied manually, reconcile that history before switching to CLI pushes. Back up an existing project first. Do not rerun the initial schema, drop existing tables to fix an upgrade, or edit applied migration files. A `relation already exists` or renamed-function error commonly means a file is being reapplied; inspect the migration history and the complete error before proceeding.
 
-The initial migration creates:
+The SQL Editor can flag function definitions containing `DELETE` as potentially destructive. Review the actual statement. Transfer cleanup removes expired temporary jobs when invoked; it does not remove customer pages during migration. Later migrations are forward extensions of the earlier schema.
 
-| Table | Purpose |
-|---|---|
-| `public.users` | Supabase Auth identity, contact details, and `user_type` |
-| `public.collections` | Groups owned by a user |
-| `public.pages` | Tracked social profiles and saved snapshots |
-| `public.memberships` | Page-to-collection links with same-owner foreign keys |
-| `public.settings` | Provider preferences, request cap, and encrypted keys |
-| `public.usage` | Monthly provider request accounting |
+Browser access is read-only and protected by owner/admin RLS. Mutations use verified server routes and fixed-purpose service-role RPCs. `tracked_accounts` is a shared public-data cache; customer metadata, `page_posts`, snapshots, and alerts remain owner-scoped. Provider settings, request logs, and transfer staging are unavailable to browser roles.
 
-Supabase Auth registration creates a normal user profile. Browser Data API access is read-only and protected by row-level security. Browser clients cannot read settings or usage, write counters, or promote themselves. The backend verifies the authenticated owner or stored admin role, then uses a separate server-only Supabase client for privileged operations. Named RPCs handle operations that must be atomic; their execution is restricted to `service_role`. No generic SQL execution endpoint is exposed.
+## 2. Configure environment variables
 
-## 2. Configure Auth URLs
+Use Node.js 22.x. For a new installation, copy [.env.example](./.env.example) to `.env.local`. For an existing installation, preserve the current file and keys and add only missing values from the example; do not replace `APP_ENCRYPTION_KEY`. In Vercel, add missing variables to the appropriate project environment while retaining existing credentials. Keep preview and production configurations separate.
 
-In **Supabase → Authentication → URL Configuration**, set:
+Required:
 
-- **Site URL:** your final production origin, for example `https://desk.example.com`.
-- **Redirect URLs:** `https://desk.example.com/auth/callback` and `http://localhost:3000/auth/callback`.
+- `NEXT_PUBLIC_SUPABASE_URL`: the Supabase API origin.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: publishable key, or legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- `NEXT_PUBLIC_APP_URL`: application origin, such as `https://desk.example.com`; no path or trailing query.
+- `SUPABASE_SECRET_KEY`: server secret, or legacy `SUPABASE_SERVICE_ROLE_KEY`. Never use a public/anon key here.
+- `APP_ENCRYPTION_KEY`: exactly 32 random bytes encoded as base64, retained across deployments.
+- `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH=false` until Google is configured.
 
-If you use a Vercel-assigned domain, use that exact domain instead. Set `NEXT_PUBLIC_APP_URL` to the same production origin. It must contain no path, query, credentials, or fragment.
-
-For a preview deployment, add only the preview origins you intend to use and configure that deployment's `NEXT_PUBLIC_APP_URL` accordingly. Production should use an exact allowlist rather than an unrestricted wildcard. Public variables are compiled into the Next.js build, so rebuild after changing them.
-
-The callback exchanges the Supabase PKCE code and accepts only a safe relative destination. Password recovery returns to the protected `/reset-password` page. Session refresh runs through `proxy.ts`; server authorization verifies the user with Supabase rather than trusting a cookie's unverified contents.
-
-## 3. Configure email registration and recovery
-
-Enable the Email provider in Supabase Auth. Keep email confirmation enabled for production, set a suitable password policy, and configure [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp) with a verified sender. Supabase's development email delivery is not a production mail service; test delivery to an address that is not a project team member.
-
-The app passes its callback URL for the normal PKCE confirmation flow. If customizing templates for server-side token-hash confirmation, use:
-
-**Confirm signup**
-
-```html
-<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard">Confirm your email</a>
-```
-
-**Reset password**
-
-```html
-<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery">Reset your password</a>
-```
-
-The `/auth/confirm` route verifies the token hash. A recovery token is routed to `/reset-password`. Do not place access tokens, database passwords, or provider keys in email templates or application URLs. Test signup, confirmation, sign-out, sign-in, recovery, and changing a password before inviting users.
-
-See [Supabase SSR Auth](https://supabase.com/docs/guides/auth/server-side/creating-a-client?framework=nextjs) and [email templates](https://supabase.com/docs/guides/auth/auth-email-templates).
-
-## 4. Enable Google sign-in, if wanted
-
-Email/password authentication works without Google configuration. To show the Google option:
-
-1. Create a Google OAuth web client and configure its consent screen and authorized users or production publishing status.
-2. In Google Cloud, set the authorized redirect URI to the **Supabase provider callback**, usually `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`. Copy the exact URL shown by Supabase if using a custom Auth domain.
-3. Enable Google under **Supabase → Authentication → Providers** and enter the Google client ID and secret there.
-4. Set `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH=true` in the app and rebuild.
-
-The Google client secret belongs in Supabase's provider configuration, not a `NEXT_PUBLIC_*` application variable. The Google callback and the application's `/auth/callback` URL are different parts of the flow. Follow [Supabase's Google setup](https://supabase.com/docs/guides/auth/social-login/auth-google) for current console steps.
-
-## 5. Set application variables
-
-Create `.env.local` in the project root for development, using the variable names below and the placeholder template in [README.md](./README.md). In Vercel, add the same variable names under Project Settings, Environment Variables, with values appropriate to each environment.
-
-| Variable | Visibility | Value |
-|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Public | Supabase project API origin |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public | Supabase publishable key; the legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` is also supported |
-| `NEXT_PUBLIC_APP_URL` | Public | Application origin; HTTPS is required in production |
-| `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH` | Public | `true` after Google is configured; otherwise `false` |
-| `SUPABASE_SECRET_KEY` | Server only | Supabase secret key beginning `sb_secret_`; legacy `SUPABASE_SERVICE_ROLE_KEY` is supported as a fallback |
-| `APP_ENCRYPTION_KEY` | Server only | Exactly 32 random bytes encoded as base64 |
-
-Copy the public URL and publishable key from your Supabase project. Add its server secret key as `SUPABASE_SECRET_KEY` in Vercel and your local environment file. For projects using legacy API keys, use the `service_role` JWT as `SUPABASE_SERVICE_ROLE_KEY` instead. Do not use a publishable or `anon` key for server operations. The privileged client uses HTTPS and is isolated from browser and Auth-session clients; it must never be sent to the browser or included in responses.
-
-Generate the encryption key once:
+Generate the encryption key once and store it securely:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-Store the result as a server secret and retain it in a password manager. The encrypted provider key format is versioned AES-256-GCM. Changing `APP_ENCRYPTION_KEY` without re-encrypting existing values makes those saved provider keys unreadable; users would need to re-enter them. This is a separate secret from the Supabase API key.
+Changing it makes saved personal provider keys unreadable unless they are re-encrypted or entered again. This is separate from Supabase and provider credentials.
 
-Never put `SUPABASE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `APP_ENCRYPTION_KEY`, or a provider key in a `NEXT_PUBLIC_*` variable. A Supabase server secret or legacy service-role key is required for the backend and remote import checks. Browser code must use only the publishable or legacy anon key.
-
-Validate without printing values:
-
-```sh
-npm run check:env
-npm run check:env -- --production
-```
-
-This validates formats and required fields. It does not prove that the keys belong to the intended project, the APIs are reachable, or the OAuth provider, SMTP service, and database migrations are correctly configured.
-
-The pre-build guard also rejects a Supabase secret/service-role key placed in public configuration before it can be bundled. An environment-free build can render the setup screen; it is not a configured production deployment. Run the full production environment check with your intended production values, then complete the hosted smoke checks below.
-
-## 6. Build and deploy
-
-Use Node.js 22 and the committed lockfile:
+Shared fetches use server-only `YOUTUBE_API_KEY`, `HIKERAPI_KEY`, `LAMATOK_KEY`, and optional `TIKHUB_KEY`/`SCRAPECREATORS_KEY`. Add only the keys you intend to use. Admin pages show whether a key is configured, never its value. No provider key, Supabase server secret, encryption key, or cron token belongs in a `NEXT_PUBLIC_*` variable.
 
 ```sh
 npm ci
+npm run check:env -- --production
+```
+
+The checker validates core variable formats without displaying secret values. It does not verify credentials, provider balances, SMTP, database connectivity, or the optional provider/cron configuration. Public variables are compiled into the app, so rebuild after changing them.
+
+## 3. Configure authentication
+
+In Supabase Auth, set the Site URL to the final application origin. Allow its exact `/auth/callback` URL and, for development, `http://localhost:3000/auth/callback`. Set `NEXT_PUBLIC_APP_URL` to the matching origin. Avoid unrestricted production redirect wildcards.
+
+Enable Email authentication, email confirmation, a suitable password policy, and production SMTP with a verified sender. Test delivery to a non-team email address. Standard signup and recovery use the app callback. If you customize token-hash templates, these routes are supported:
+
+```html
+<!-- Confirm signup -->
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard">Confirm email</a>
+<!-- Password recovery -->
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery">Reset password</a>
+```
+
+Recovery continues at `/reset-password`. Do not put access tokens, passwords, or keys into templates or custom application URLs. See [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates) and [SMTP setup](https://supabase.com/docs/guides/auth/auth-smtp).
+
+The login form also offers **Email me a sign-in link** for existing accounts. It uses Supabase email OTP with PKCE and does not create new users. Use the configured Supabase magic-link template and open the resulting email in the same browser that requested it. Keep the standard confirmation link flow when customizing that template; test the full callback before sharing it. Users can use their password if a sign-in link expires or is opened in another browser.
+
+For Google, create an OAuth web client, enter the exact Supabase provider callback in Google Cloud, and configure the client ID/secret in Supabase Auth. The provider callback is normally `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`; it differs from the application's `/auth/callback`. Set `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH=true` and rebuild. Follow [Supabase Google setup](https://supabase.com/docs/guides/auth/social-login/auth-google).
+
+## 4. Build and deploy
+
+```sh
 npm run typecheck
 npm test
 npm run build
 ```
 
-For local use:
+Import the repository into Vercel as a Next.js project, select Node.js 22.x, and use `npm ci` with `npm run build`. Review the cron plan requirement below **before deploying**. An environment-free build can show the demo and setup screens; it does not mean authentication or live data is configured.
 
-```sh
-npm run dev
-```
+Refresh/cron routes declare a 300-second maximum duration and use shorter internal deadlines. Confirm the [function limits of your Vercel plan](https://vercel.com/docs/functions/configuring-functions/duration). Keep the function region near Supabase. For a local production smoke check after building, use `npm start`.
 
-For a local production run after building:
+## 5. Designate the admin in the database
 
-```sh
-npm start
-```
-
-Push the source to your own Git repository and import it into Vercel. Select the **Next.js** framework preset, Node.js **22.x**, install command `npm ci`, and build command `npm run build`. Use the project's root directory and the default Next.js output settings. Add the environment variables before building, deploy, and make sure Supabase's Site URL and callback allowlist match the resulting domain.
-
-Use Vercel Fluid Compute for the refresh route. It declares a 300-second maximum and bounds provider work below that duration. Refreshes run page by page from the UI; they are not background jobs or a scheduled scraper. See [Vercel function duration](https://vercel.com/docs/functions/configuring-functions/duration) for the limits of your plan. Keep the Vercel function region close to the Supabase project when choosing deployment regions.
-
-## 7. Create the first admin
-
-Sign up and sign into the deployed application. This creates your `public.users` profile with `user_type = 'user'`.
-
-In the Supabase SQL Editor, locate your **verified** profile:
+Sign up normally and verify the intended account. Find its exact UUID:
 
 ```sql
 select id, email, user_type
@@ -161,7 +105,7 @@ from public.users
 where email = 'YOUR_VERIFIED_EMAIL';
 ```
 
-Copy its exact UUID, then promote that account:
+Then change only that record:
 
 ```sql
 update public.users
@@ -169,114 +113,65 @@ set user_type = 'admin'
 where id = 'YOUR_VERIFIED_USER_UUID';
 ```
 
-Reload `/dashboard`; the admin link appears. `/admin` has People, Collections, and Pages sections with owner details. To revoke access, set the same row's `user_type` to `user`. The server checks the stored role on subsequent requests, and later sign-ins do not overwrite manual role changes. Never assign roles from editable Auth user metadata.
+Reload the app. `/admin` shows people, collections, and pages, with page assignment/management; `/admin/providers` shows provider operations. The admin's own dashboard still loads their own workspace. Revoke admin access by setting the same row to `user`; subsequent protected requests recheck the stored role.
 
-Sign-in and signup offer no admin selection. In the directory, start with People and use their Collections or Pages buttons, then follow collection breadcrumbs. Page details show saved metrics and actual collection names after the sixth migration. The directory is read-only, with no impersonation, account-role editing, or payment controls. My workspace continues to show only the signed-in user's data.
+Signup, login, editable Auth metadata, and backup files cannot grant admin. There is no email-list bootstrap, role editor, View tier, subscription gating, or impersonation.
 
-## 8. Check the real deployment
+## 6. Review provider rates and enable scheduling
 
-Use two separate accounts or browser profiles:
+Before the first paid refresh, visit `/admin/providers` and set provider order, fallback order, request prices, the monthly request cap, and estimated budget. Defaults are 25,000 attempts/month, a $25 estimated budget, 24-hour refresh intervals, and scheduling **paused**. HikerAPI/LamaTok default to $0.02/request; verify your purchased tier before changing them. Cost examples and vendor links are in [README.md](./README.md).
 
-1. Signed out: the homepage and login work; `/dashboard` and `/admin` lead to login. `/api/account`, `/api/desk`, and `/api/admin` must reject anonymous requests.
-2. Account A: create a collection, add pages, duplicate it, remove a page from the copy, and reload. Confirm the original remains intact.
-3. Account B: confirm A's pages and collections are absent. A regular user must not open admin data or mutate another user's collection by guessing its ID.
-4. Promote A using SQL: admin lists must show both registered people and the correct owners of their collections/pages. Follow B's Collections into one collection, inspect page details and membership names, and use the breadcrumbs to return. Check mobile navigation and partial versus unavailable metrics. Returning to My workspace must still show only A's own records. Set A back to `user` and confirm the next admin request is denied.
-5. Add a small test provider key and refresh a real page. Confirm views and coverage, missing metrics, a failed refresh preserving prior data, and request-cap feedback. Provider charges may apply.
-6. Hide columns and enter a manual metric. Reload and confirm the preferences and `*` marker persist in that browser. Export CSV and confirm manual flags are present.
-7. Test phone layout, email confirmation, recovery, Google if enabled, and POST sign-out.
-
-Automated checks validate application logic and database policies in the test environment. A hosted Supabase/Vercel smoke test is still needed with your real credentials and provider configuration.
-
-## Data portability: import an existing workspace
-
-### Move between Distribution Desk accounts
-
-Apply the fifth migration above to enable **Import / export** in the dashboard. An existing installation with the original four migrations needs `20261025000000_workspace_transfer.sql` for transfers, followed by `20261026000000_admin_directory.sql` for the enhanced admin report. If the transfer migration is already applied, apply only the new admin-directory migration.
-
-In the source account, download a JSON workspace backup. Sign in to the destination account, upload it under **Import backup**, preview the record counts and choose whether to keep existing values or use the backup's values for matching records. Both modes add missing memberships and retain unrelated destination data. Repeated imports use portable identities to prevent duplicate records, and native platform identities allow matching social-page aliases.
-
-The authenticated `/api/transfer` endpoint binds every operation to the verified owner. The `desk_workspace_transfer` RPC and its private staging tables are accessible only to the backend service role. Uploads/downloads use 512 KB binary chunks to stay below hosting payload limits. Backups are capped at 100 MB, with a 98 MB server snapshot limit to leave room for browser preferences. Jobs expire after one hour; a subsequent transfer operation purges expired staging. Keep the Supabase database function timeout and Vercel function duration suitable for the workspaces you operate.
-
-Imports validate counters, timestamps, profile URLs, snapshots, memberships and record caps. Preview writes only private staging data. Apply rechecks current limits and active refresh leases, then restores records in one transaction. A network retry of an already committed job returns its previous result. A failed apply rolls back all workspace changes. Transfer jobs are not intended as long-term backup storage: keep the downloaded JSON yourself.
-
-Collections, social profiles, post snapshots, coverage, native platform identities, refresh timestamps and errors, and browser view preferences are portable. API keys, Auth accounts, roles and usage counters are excluded. Optional settings restoration copies provider choice and request/post limits; switching providers clears the previous social-provider key. Re-enter provider keys in the destination account. Manual values and saved selections are remapped and restored in the importing browser; if browser storage is blocked, database records still import and the UI reports the preference limitation.
-
-### Import an older workspace export using the CLI
-
-Old ChatGPT-hosted user IDs are not Supabase Auth UUIDs. Create each target Supabase account first, sign in once, and map every old owner to the correct verified `public.users.id`.
-
-The importer accepts an authorized, sanitized JSON export of collections, pages, and memberships. It accepts database-style snake_case or workspace-style camelCase keys. Every record needs `owner` or `ownerId`; a single-user export can provide a top-level `owner` as a default. It does not fetch old data or log into another system for you.
-
-Example export structure, with synthetic IDs:
-
-```json
-{
-  "owner": "old-owner-id",
-  "collections": [
-    {"id":"22222222-2222-4222-8222-222222222222","name":"Example collection","createdAt":"2026-10-24T00:00:00Z"}
-  ],
-  "pages": [
-    {"id":"33333333-3333-4333-8333-333333333333","platform":"instagram","handle":"examplepage","url":"https://www.instagram.com/examplepage/","name":"Example page","followers":null,"posts":[],"coverage":{},"overall":null}
-  ],
-  "memberships": [
-    {"collectionId":"22222222-2222-4222-8222-222222222222","pageId":"33333333-3333-4333-8333-333333333333"}
-  ]
-}
-```
-
-Example `owner-map.json`:
-
-```json
-{"old-owner-id":"11111111-1111-4111-8111-111111111111"}
-```
-
-Use your actual target UUID, not the example. Review the export, keep it outside Git, and take a target database backup. Apply the legacy import migration and set the Supabase URL plus server secret through `.env.local`, then run:
+Create a separate random cron secret of at least 32 characters:
 
 ```sh
-# Validate JSON, ownership references, counters, URLs, and size limits only.
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Set it as `CRON_SECRET` in Vercel. The endpoint requires `Authorization: Bearer <CRON_SECRET>`; cookies or query-string tokens are not accepted. Vercel supplies this header for configured cron invocations.
+
+`vercel.json` schedules `/api/cron/refresh` at `17 * * * *` (UTC). **This hourly expression requires a supporting Vercel plan. Hobby rejects schedules more frequent than daily**, even if the database refresh switch is off. For Hobby, change/remove that cron entry before deployment. A daily invocation processes only one bounded batch; use an authenticated external scheduler or a suitable plan if the queue needs hourly runs. See [Vercel cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing).
+
+Each invocation uses an internal roughly 220-second deadline and at most 50 attempted shared accounts, selecting oldest attempts first. Each account normally becomes due after 24 hours, not every hourly invocation. Work beyond the batch/deadline remains for a later run. Recent-post fetching, paging costs, and slow providers can reduce throughput. Inactive pages do not refresh automatically. Shared cached results are copied to each owner's history without copying their private details into the shared cache.
+
+At 75% of either cap, the interval doubles; at 90%, it quadruples. At the cap, paid requests stop and saved data stays available. Every attempt, including retry/fallback, reserves its request and estimated cost atomically. Provider invoices may differ from these configured estimates.
+
+Test one real page with a small allowance, inspect the request log, then enable **Scheduled refresh**. Raw debug samples are redacted and bounded. Cleanup removes samples older than seven days during scheduled invocations or subsequent provider activity; an idle deployment does not run cleanup by itself. Request metadata remains for reporting.
+
+## 7. Hosted smoke checks
+
+Use two accounts or separate browser profiles:
+
+1. Signed out, open `/demo`; protected dashboard, collections, and admin routes must require login. Protected APIs must reject anonymous requests.
+2. Test signup, email confirmation, password sign-in, same-browser emailed-link sign-in for an existing account, sign-out, recovery, and Google if enabled. Confirm login/signup expose no admin choice.
+3. Account A: add a page, edit its pay/editor/status, create collections, and reload. Account B must not read or change A's records through either UI or API.
+4. Promote A through SQL. Inspect B's collections/pages and assign/edit a page for B. Confirm the admin's own dashboard remains owner-scoped. Revoke A and verify the next admin request fails.
+5. Refresh a real public account. Check request counts/cost, unknown versus zero metrics, coverage, failed refresh preservation, and last-updated time. Repeat from a second owner to check shared caching.
+6. Verify signed cron authentication and a bounded run. Check paused scheduling, inactive pages, queue progress, and cap behavior using small test limits.
+7. Check range comparisons, maturing/history-needed labels, platform-specific rankings, CSV, and browser Print/Save as PDF. New live data will not immediately have day-seven scores.
+8. Export A's workspace and import into B with preview. Check metadata, history, alerts, memberships, and browser preferences. Repeat with keep/overwrite; unrelated data must remain. Keys/roles/global provider configuration must not transfer.
+9. Test mobile layouts, keyboard dialogs, empty/error states, and large lists.
+
+## Backups and legacy imports
+
+Use **Import / export** in `/collections` for full current backups. The authenticated transfer API stages 512 KB chunks, caps uploads at 100 MB, and applies the whole import transactionally. Jobs expire after one hour. Downloaded files contain private page/business data; keep them securely. Schema migrations and backups serve different purposes.
+
+The separate legacy CLI accepts a sanitized export of `collections`, `pages`, and `memberships` plus an explicit old-owner-to-Supabase-UUID JSON map. Create each target Auth account and sign in first. Keep exports and maps outside Git. This CLI preserves old record IDs, inserts missing rows, and never overwrites conflicting records; it does not import V2 analytics history, roles, keys, settings, or browser preferences.
+
+```sh
+# Validate local files only.
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --validate-only
-
-# Check target users, collisions, and final record limits through the Supabase API. No rows are written.
+# Check target users/collisions/limits through Supabase without writing rows.
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json
-
-# Insert new rows in one transaction after reviewing the dry run.
+# Apply after reviewing the dry run.
 npm run import:legacy -- --file workspace-export.json --owners owner-map.json --apply
 ```
 
-The importer validates the files locally, then calls `desk_import_legacy(p_data jsonb, p_apply boolean default false)` using the Supabase JavaScript SDK. The named function runs as its caller and is executable only by `service_role`. A dry run takes the same per-owner locks and checks as an import but writes no rows; an applied import completes in one transaction.
+## Operations and troubleshooting
 
-The importer preserves collection and page IDs, cached posts, coverage, and last-refresh timestamps; it clears stale refresh locks. Existing rows are never overwritten. Conflicting IDs, another owner's records, or a handle already saved under a different page ID cause the transaction to fail. Repeating the same successful import is safe because existing matching records are skipped.
-
-Accounts, roles, API keys, settings, usage, and browser preferences are not imported. Re-enter provider keys in the new application. Old ciphertext is tied to the old encryption key and is deliberately not reused. The importer also enforces the app's limit of 100 collections and 500 pages per target user.
-
-## Operations and recovery
-
-- Enable Supabase backups appropriate to your project and test restoring into a separate environment. Keep database migration files with each source release.
-- Keep the encryption key stable and backed up separately from the source. If a provider key is exposed, revoke it at the provider and replace it in the app. Do not silently rotate the application encryption key over existing ciphertext.
-- Preserve production environment variables when rolling back application code. A Vercel rollback does not undo a database migration; use forward-compatible migrations and review schema compatibility before rolling back.
-- Use Vercel and Supabase logs to diagnose failures, but do not log provider keys, passwords, cookies, refresh tokens, or complete private exports. Server errors returned to users should not include database credentials or raw SQL.
-- Review public Auth signup settings, rate limits, email delivery, and provider spend limits before inviting a larger audience. The app request cap counts provider attempts, not a guaranteed dollar budget.
-
-## Troubleshooting
-
-| Symptom | Check |
-|---|---|
-| Login shows setup instructions | Missing public Supabase URL/key or production app origin; set variables and rebuild |
-| Callback fails or returns to the wrong domain | Supabase Site URL, exact callback allowlist, and `NEXT_PUBLIC_APP_URL` |
-| Confirmation/recovery email never arrives | SMTP sender verification, provider logs, spam folder, Auth email limits, and templates |
-| Backend Supabase API calls fail | Supabase project URL/status, server secret, API reachability, and server-only configuration |
-| Missing relation, profile, or RPC errors | A required migration was not applied, or the deployment points to the wrong project |
-| Admin access denied | Verify the signed-in account's UUID and stored `public.users.user_type`; reload after SQL change |
-| Saved provider key cannot be read | `APP_ENCRYPTION_KEY` differs from the key used when the value was saved |
-| Provider refresh fails | User key, provider balance/status, supported endpoint, and the app's request cap |
-
-## Primary documentation
-
-- [Supabase Next.js SSR setup](https://supabase.com/docs/guides/auth/server-side/creating-a-client?framework=nextjs)
-- [Supabase API keys](https://supabase.com/docs/guides/api/api-keys)
-- [Supabase database functions](https://supabase.com/docs/guides/database/functions)
-- [Supabase row-level security](https://supabase.com/docs/guides/database/postgres/row-level-security)
-- [Supabase Google authentication](https://supabase.com/docs/guides/auth/social-login/auth-google)
-- [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates)
-- [Vercel Next.js deployment](https://vercel.com/docs/frameworks/full-stack/nextjs)
-- [Vercel function duration](https://vercel.com/docs/functions/configuring-functions/duration)
+- Enable Supabase backups appropriate to your project and test a restore into a separate environment. A Vercel code rollback does not roll back database migrations.
+- Retain `APP_ENCRYPTION_KEY`. Revoke exposed provider credentials at the provider, then replace them in server configuration or personal settings.
+- A missing relation/RPC usually indicates unapplied migrations or the wrong Supabase project. `already exists` usually means a migration is being reapplied; inspect before changing anything.
+- Auth redirects depend on the exact app origin, callback allowlist, and a rebuild after public-variable changes. Email delivery depends on SMTP/provider settings.
+- Provider failures can mean missing keys, an incorrect adapter order, provider balance/availability, or a request/budget limit. Saved data should remain available.
+- Scores showing insufficient data are expected until enough real day-seven observations exist. Historical follower values cannot be recovered by rerunning a fetch.
+- No optional email summary, WhatsApp delivery, or cross-page source-video matching is configured in this release.

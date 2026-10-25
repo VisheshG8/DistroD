@@ -2,6 +2,9 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+const providerKeys = ['HIKERAPI_KEY', 'LAMATOK_KEY', 'YOUTUBE_API_KEY', 'TIKHUB_KEY', 'SCRAPECREATORS_KEY'];
+const optionalServerSecrets = ['CRON_SECRET', ...providerKeys];
+
 function legacyRole(key) {
   if (typeof key !== 'string' || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(key)) return null;
   try { return JSON.parse(Buffer.from(key.split('.')[1], 'base64url').toString()).role || null; }
@@ -10,7 +13,9 @@ function legacyRole(key) {
 export function isPrivilegedSupabaseKey(key) { return typeof key === 'string' && (key.startsWith('sb_secret_') || legacyRole(key) === 'service_role'); }
 export function isSupabaseServiceKey(key) { return typeof key === 'string' && (/^sb_secret_[A-Za-z0-9_-]+$/.test(key) || legacyRole(key) === 'service_role'); }
 export function validatePublicSecrets(env) {
-  return Object.entries(env).filter(([name, value]) => name.startsWith('NEXT_PUBLIC_') && isPrivilegedSupabaseKey(typeof value === 'string' ? value.trim() : value)).map(([name]) => `${name} must never contain a Supabase secret/service_role key.`);
+  const errors = Object.entries(env).filter(([name, value]) => name.startsWith('NEXT_PUBLIC_') && isPrivilegedSupabaseKey(typeof value === 'string' ? value.trim() : value)).map(([name]) => `${name} must never contain a Supabase secret/service_role key.`);
+  for (const name of optionalServerSecrets) if (env['NEXT_PUBLIC_' + name]?.trim()) errors.push(`${name} must remain server-only; remove NEXT_PUBLIC_${name}.`);
+  return errors;
 }
 
 /** The importer and server use the HTTPS SDK; no SQL connection credentials are needed. */
@@ -58,6 +63,15 @@ export function validateEnvironment(env, { production = false } = {}) {
   const google = env.NEXT_PUBLIC_ENABLE_GOOGLE_AUTH;
   if (google !== undefined && !['true', 'false'].includes(google)) errors.push('NEXT_PUBLIC_ENABLE_GOOGLE_AUTH must be true or false.');
   if (google === 'true') warnings.push('Enable Google in Supabase Auth and configure its redirect URI before testing Google sign-in.');
+  for (const name of providerKeys) {
+    const value = env[name]?.trim();
+    if (value && /^(?:your[-_ ]|replace[-_ ]|<)/i.test(value)) errors.push(`${name} contains a placeholder; configure a real server key or leave it unset.`);
+  }
+  if (!providerKeys.some(name => env[name]?.trim())) warnings.push('No shared provider keys are configured. Scheduled data refresh cannot fetch accounts; manual refresh can use saved workspace keys.');
+  const cronSecret = env.CRON_SECRET;
+  if (cronSecret?.trim()) {
+    if (cronSecret.length < 32 || cronSecret !== cronSecret.trim() || /^(?:your[-_ ]|replace[-_ ]|<)/i.test(cronSecret)) errors.push('CRON_SECRET must contain at least 32 random characters without surrounding whitespace.');
+  } else warnings.push('CRON_SECRET is unset. The scheduled refresh endpoint is disabled.');
   return { errors: [...new Set(errors)], warnings };
 }
 

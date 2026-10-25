@@ -1,44 +1,52 @@
 # Verification
 
-## Admin directory update - 26 October 2026
+## V2 local validation
 
-Verified locally using Node.js 24.19.0:
+The V2 work adds provider adapters and scheduling, owner-scoped historical analytics, page metadata and admin operations, a new analytics interface, and extended workspace backups. Validation uses synthetic fixtures, the real Supabase SDK, and PGlite running the actual SQL migrations. These checks do not touch a hosted database.
 
-- All **110 existing regression tests passed**, followed by **two new UI regression tests** after the final review. The admin tests cover owner-safe collection membership names, counter availability, valid zero values, credential redaction, revoked roles, browser-role restrictions, and data preservation when the new reporting migration is reapplied. The UI tests exercise navigation with an unnamed account and search changes before passive effects run, ensuring old rows never render under the new request.
-- TypeScript validation passed after removing the temporary preview and its generated development types.
-- The public-environment guard and production build (`next build --webpack`) passed, including compilation, TypeScript, static generation, and build traces. The generated route list contains no preview route. The default build command remains unchanged.
-- Browser checks covered People-first navigation, 25-row pagination, person-to-collection-to-page navigation, retained owner breadcrumbs, collection links, partial metrics, zero versus unavailable values, and clearing search when switching sections. Mobile checks at 390 pixels covered first-column shortcuts and confirmed no document-wide horizontal overflow.
-- The populated browser preview used synthetic data and intercepted admin requests locally. Its temporary route was removed; no real workspace records or account roles were changed.
-- Sign-in and signup showed no admin option. Signed-out `/admin` redirected to login, and `/api/admin` and `/api/desk` returned HTTP 401.
+Confirmed transfer regression command:
 
-Apply `20261026000000_admin_directory.sql` to the real Supabase project after the earlier migrations. It replaces only the admin reporting function and preserves existing data and stored roles. The migration has not been applied to a live project by these checks. Verify an actual database-designated admin and a normal user after deployment using DEPLOYMENT.md.
+```sh
+node --test tests/analytics-transfer.test.mjs tests/workspace-transfer.test.mjs
+```
 
-## Workspace transfer and UI release — 25 October 2026
+Result: **23 tests passed, zero failures**. Coverage includes:
 
-Verified locally using Node.js 24.19.0:
+- Atomic export of metadata, cumulative posts, real account/post observations, and alerts.
+- Owner/page reference remapping and exclusion of roles, keys, global provider settings, shared cache payloads, and request logs.
+- Preservation of the first daily observation, old version-1 backup compatibility, keep/overwrite choices, repeated imports, and network retries.
+- Alert identity through later resolution and recreation of a page removed between preview and apply.
+- Strict rejection of malformed counters, dates without timezones, duplicate daily samples, invalid metadata, and foreign references.
+- Injected failure proving all workspace/history changes roll back together; private transfer functions remain inaccessible to browser roles.
+- Existing Unicode chunking, bounded request streams, refresh-lease checks, quota preservation, manual-value/view remapping, and route authentication regressions.
 
-- TypeScript validation completed without errors.
-- The full Node.js regression suite passed: **107 tests, zero failures**.
-- `next build --webpack` completed successfully, including compilation, TypeScript, static generation and build traces. The standard Turbopack build encountered a managed-Windows worker-spawn denial while processing CSS; the package's default build command was not changed.
-- Browser checks covered the empty dashboard, populated metrics, collection navigation, 25-row pagination (25 rows followed by 7 in a 32-page fixture), backup dialog tabs, and phone-sized layouts. The populated fixture was isolated from live workspace requests and removed after verification.
-- Transfer tests use the real Supabase SDK and all five migrations in PGlite. They cover complete snapshots, owner isolation, post/page ID remapping, repeated imports, keep/overwrite modes, native-ID alias matching, Unicode chunking, malformed uploads, forged Content-Length, active refresh leases, quota preservation, transactional rollback and browser-role restrictions. Preference tests verify manual values, column visibility and scope remapping.
+The integrated `node --test tests/*.test.mjs` run passed **202 tests, zero failures, zero skipped**. Four additional server-rendering/CSV regressions then passed in a six-test targeted run that also included two existing admin UI tests. This gives **206 unique passing tests** across those runs; the complete 206-test suite was not rerun as one command.
 
-Apply `20261025000000_workspace_transfer.sql` to the actual Supabase project before using `/api/transfer`. Existing installations must have the original four migrations first. The real hosted transfer flow still needs a smoke check after this migration is applied; database tests do not apply migrations to a live project.
+The Next.js production webpack build passed compilation, TypeScript validation, route generation, and build tracing. The project's default build command remains `npm run build`; the verified build used the webpack option. Core environment validation passed. The current local configuration has no shared provider keys and no `CRON_SECRET`, so shared live fetches and authenticated scheduled refresh still require those values.
 
-## Earlier SDK baseline — 24 October 2026
+Local desktop and 390-pixel mobile browser checks covered all seven analytics sections, page detail, comparisons, same-platform post rankings, page/monthly CSV downloads, and mobile layouts without horizontal overflow. Password and emailed-link forms showed no admin hints. An initial development-server render exposed an SVG title/hydration warning; that issue was fixed, with actual server-rendering regression tests passing. A fresh production-server browser check then verified the overview, interactive page detail and health breakdown, and economics chart. Browser warning/error logs were empty and the production server emitted no render warnings. Preview tabs and servers were closed after verification.
 
-Verified on 24 October 2026 using Node.js 22.21.1:
+## Checks that require hosted services
 
-- Standard `npm run typecheck` completed without errors.
-- Standard `npm test`: all 94 tests passed.
-- Standard `npm run build` completed with Next.js 16.4.3.
-- Production dependency audit reported zero known vulnerabilities.
-- The built production server returned the homepage and login with HTTP 200. Protected dashboard/admin pages redirected to login; account, workspace, and admin APIs rejected anonymous access with HTTP 401. Refresh and sign-out remained POST-only.
+No live Supabase migration, paid provider request, or Vercel deployment was performed by the local build work. There is no new live deployment URL to report. The following still require the owner's configured projects:
 
-The SDK regression tests use the real Supabase JavaScript client with a PostgreSQL-backed test transport. They verify request serialization and owner filters, account-role preservation, encrypted provider settings, pagination beyond 1,000 memberships, atomic request caps, refresh leases, alias merge/rollback, and duplicate-canonical-page races. SQL integration tests apply the actual migrations in PGlite and check browser grants, RLS, backend-only RPC execution, stored admin authorization, safe metric totals, and atomic legacy imports.
+- Applying only missing migrations from the nine-file sequence in [DEPLOYMENT.md](./DEPLOYMENT.md).
+- Supabase Data API connectivity, email confirmation/recovery delivery, and optional Google sign-in.
+- Real vendor credentials, purchased price tiers, public/private/not-found responses, endpoint coverage, and invoices.
+- A Vercel plan supporting the configured hourly cron, a valid `CRON_SECRET`, and real queue throughput within function limits.
+- Two-account isolation and SQL-designated admin access on the deployed services, including role revocation.
+- A hosted full-backup round trip between accounts, including browser preferences, after all migrations are applied.
 
-No direct PostgreSQL driver or connection string is used by the app or importer. Backend requests require the server-only Supabase secret key; encryption still requires the stable application encryption key.
+Use the explicit smoke checklist in [DEPLOYMENT.md](./DEPLOYMENT.md). The demo is synthetic and does not prove that a provider or production database is configured.
 
-The actual Supabase project and Vercel deployment were not connected during these checks. Real Supabase Data API access, email/Google login, SMTP delivery, provider requests, and the final hosted application still need the project-specific smoke checks in DEPLOYMENT.md. Local tests do not replace those hosted checks.
+## Expected limits, not fabricated results
 
-Existing hosted records are not automatically transferred. The CLI legacy importer requires a complete export and an explicit old-owner-to-Supabase-user mapping; it never imports roles or saved API keys. Current Distribution Desk accounts can use the dashboard workspace backup/import flow described in README.md after the fifth migration is applied.
+Actual tracking history starts with saved observations. Imported old posts do not acquire invented earlier views or follower history. Day-seven performance needs an observation at 7–8 days of post age; health scores require enough comparable matured posts and component data. Partial coverage remains labelled.
+
+Pay reports prorate the current rate using calendar days; they do not reconstruct past pay changes or active periods. Provider dollar values are configurable estimates. The default $25 budget does not guarantee every account can refresh daily at every vendor tier.
+
+Payments, plans, pricing, View users, and impersonation are intentionally omitted. Optional daily email summaries, WhatsApp delivery, cross-page source-video matching, a separate pre-save profile preview, and exhaustive historical backfill are not implemented.
+
+## Earlier baseline
+
+Earlier release notes recorded successful SDK/RLS/import regression suites, type checks, production compilation, and local browser checks for collections and the admin directory. Those baseline checks covered the earlier six migrations and do not substitute for the new V2 integration and hosted checks.
