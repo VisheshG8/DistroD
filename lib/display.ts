@@ -107,7 +107,7 @@ export function sumDisplay(values: DisplayValue[]): DisplayValue {
 
 export const TABLE_COLUMNS = ['page','followers','views','likes','comments','shares','posts','coverage','lifetimeViews','lifetimePosts','refreshed'] as const;
 export type ColumnVisibility = Record<HeaderKey, boolean>;
-export const DEFAULT_COLUMNS: ColumnVisibility = {page:true,followers:true,views:true,likes:true,comments:true,shares:true,posts:true,coverage:true,lifetimeViews:true,lifetimePosts:false,refreshed:true};
+export const DEFAULT_COLUMNS: ColumnVisibility = {page:true,followers:true,views:true,likes:true,comments:true,shares:false,posts:true,coverage:true,lifetimeViews:false,lifetimePosts:false,refreshed:true};
 export function normalizeColumns(input: unknown): ColumnVisibility {
   const result = {...DEFAULT_COLUMNS};
   if (input && typeof input === 'object' && !Array.isArray(input)) for (const key of TABLE_COLUMNS) {

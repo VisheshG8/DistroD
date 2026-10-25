@@ -12,6 +12,9 @@ Apply these files from `supabase/migrations/` once, in this order, using the Sup
 2. `20261024010000_sdk_operations.sql` — atomic workspace and refresh operations for the SDK.
 3. `20261024015000_sdk_admin.sql` — authorized admin queries for the SDK.
 4. `20261024020000_sdk_legacy_import.sql` — the optional import RPC.
+5. `20261025000000_workspace_transfer.sql` - portable record IDs and full workspace export/import with private chunk staging.
+
+The SQL Editor may show a potential-issues confirmation for the transfer migration because it defines temporary-transfer cleanup functions containing `DELETE`. This is a query-review warning, not an execution error. The migration backfills only empty portable IDs and enables RLS on both private staging tables, with browser access revoked. Applying it does not delete existing collections or social pages; cleanup functions remove temporary transfer records when invoked.
 
 For an existing project that already has the initial schema, apply only the later migrations that have not been applied. Alternatively, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), link this directory to your project, and use its migration workflow:
 
@@ -84,7 +87,7 @@ The Google client secret belongs in Supabase's provider configuration, not a `NE
 
 ## 5. Set application variables
 
-Copy `.env.example` to `.env.local` for development. In Vercel, add the same variable names under **Project → Settings → Environment Variables**, with values appropriate to each environment.
+Create `.env.local` in the project root for development, using the variable names below and the placeholder template in [README.md](./README.md). In Vercel, add the same variable names under Project Settings, Environment Variables, with values appropriate to each environment.
 
 | Variable | Visibility | Value |
 |---|---|---|
@@ -182,6 +185,20 @@ Use two separate accounts or browser profiles:
 Automated checks validate application logic and database policies in the test environment. A hosted Supabase/Vercel smoke test is still needed with your real credentials and provider configuration.
 
 ## Data portability: import an existing workspace
+
+### Move between Distribution Desk accounts
+
+Apply the fifth migration above to enable **Import / export** in the dashboard. An existing installation with the original four migrations only needs `20261025000000_workspace_transfer.sql` for this release.
+
+In the source account, download a JSON workspace backup. Sign in to the destination account, upload it under **Import backup**, preview the record counts and choose whether to keep existing values or use the backup's values for matching records. Both modes add missing memberships and retain unrelated destination data. Repeated imports use portable identities to prevent duplicate records, and native platform identities allow matching social-page aliases.
+
+The authenticated `/api/transfer` endpoint binds every operation to the verified owner. The `desk_workspace_transfer` RPC and its private staging tables are accessible only to the backend service role. Uploads/downloads use 512 KB binary chunks to stay below hosting payload limits. Backups are capped at 100 MB, with a 98 MB server snapshot limit to leave room for browser preferences. Jobs expire after one hour; a subsequent transfer operation purges expired staging. Keep the Supabase database function timeout and Vercel function duration suitable for the workspaces you operate.
+
+Imports validate counters, timestamps, profile URLs, snapshots, memberships and record caps. Preview writes only private staging data. Apply rechecks current limits and active refresh leases, then restores records in one transaction. A network retry of an already committed job returns its previous result. A failed apply rolls back all workspace changes. Transfer jobs are not intended as long-term backup storage: keep the downloaded JSON yourself.
+
+Collections, social profiles, post snapshots, coverage, native platform identities, refresh timestamps and errors, and browser view preferences are portable. API keys, Auth accounts, roles and usage counters are excluded. Optional settings restoration copies provider choice and request/post limits; switching providers clears the previous social-provider key. Re-enter provider keys in the destination account. Manual values and saved selections are remapped and restored in the importing browser; if browser storage is blocked, database records still import and the UI reports the preference limitation.
+
+### Import an older workspace export using the CLI
 
 Old ChatGPT-hosted user IDs are not Supabase Auth UUIDs. Create each target Supabase account first, sign in once, and map every old owner to the correct verified `public.users.id`.
 

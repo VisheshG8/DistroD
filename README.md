@@ -12,6 +12,8 @@ The application runs on Next.js with Supabase for authentication and PostgreSQL 
 - **Flexible selections:** choose 1-1,000 recent posts per page or a publication date range, with coverage labels and last-refresh details.
 - **Manual refreshes:** refresh one page or the visible selection, with progress, error feedback, cached snapshots, and a monthly provider request cap.
 - **Reporting:** search, filter by platform, sort pages, choose visible columns, and export the current view as CSV.
+- **Workspace backups:** export every collection, tracked social account, post snapshot, metric and saved view as JSON, then import into another login with a preview and duplicate detection. Large backups transfer in chunks.
+- **Easier navigation:** searchable collections, mobile navigation, 25-row table pagination, and a monthly API usage meter. Totals and CSV exports still cover all matching pages.
 - **Manual metric entries:** edit displayed values; an asterisk (`*`) and CSV flags identify manual values. Overrides and column preferences are saved per account in that browser.
 - **Admin directory:** inspect People, Collections, and Pages across registered workspaces, including ownership and collection membership.
 
@@ -51,7 +53,8 @@ Apply the migrations once, in this order, through the Supabase SQL Editor or the
 | [20261024000000_init.sql](./supabase/migrations/20261024000000_init.sql) | Tables, Auth profile trigger, and browser access policies |
 | [20261024010000_sdk_operations.sql](./supabase/migrations/20261024010000_sdk_operations.sql) | Atomic collection, page, request-accounting, and refresh operations |
 | [20261024015000_sdk_admin.sql](./supabase/migrations/20261024015000_sdk_admin.sql) | Admin directory queries with stored-role authorization |
-| [20261024020000_sdk_legacy_import.sql](./supabase/migrations/20261024020000_sdk_legacy_import.sql) | RPC for optional legacy workspace imports |
+| [20261024020000_sdk_legacy_import.sql](./supabase/migrations/20261024020000_sdk_legacy_import.sql) | Atomic import validation for workspace restoration and legacy imports |
+| [20261025000000_workspace_transfer.sql](./supabase/migrations/20261025000000_workspace_transfer.sql) | Portable record identities and private, chunked workspace backup/import operations |
 
 For an existing database, apply only migrations that have not already run. The application tables are `users`, `collections`, `pages`, `memberships`, `settings`, and `usage` in the `public` schema.
 
@@ -125,6 +128,22 @@ The current limits are **100 collections**, **500 unique pages per user**, and *
 - **Manual entries:** overrides affect displayed totals and CSV exports, retain the `*` marker, and leave stored provider snapshots intact. They are browser-local and do not sync across devices.
 - **Refresh behavior:** refreshes are initiated in the UI and run page by page. Matching snapshots less than five minutes old may be reused. Failed refreshes preserve the last successful snapshot; background scheduled collection is not implemented.
 
+## Move a workspace to another account
+
+1. In the source account, choose **Import / export** in the top bar, then **Download workspace**. This downloads a `.json` backup of the entire workspace, regardless of the current collection, filters or table page.
+2. Sign in with the destination account, choose **Import / export → Import backup**, and select the file.
+3. Choose **Preview import**. Review the collection, social-page and post counts, and see how many records already exist in the destination.
+4. Choose **Keep my existing values** to add missing records, or **Use the backup's values** to update matching collection names, page snapshots and manual metric entries. Unrelated records are retained in both modes.
+5. Optionally restore provider choice and refresh limits, then choose **Import workspace**.
+
+Backups include page names, handles, native platform identities, posts, counters, coverage, last-refresh timestamps, collection memberships, browser-local manual entries, visible columns and saved post/date selections. View preferences come from the browser performing the export. Imports remap record IDs to the destination user and preserve page-to-collection and post-to-page links. Reimporting the same backup does not create duplicate collections or pages.
+
+API keys, passwords, login sessions, roles and monthly request usage are not transferred. Provider keys must be configured in the destination account for future refreshes. Restoring a different provider choice clears the destination's old social-provider key; usage counters are never reset. Exports preserve the latest stored snapshot, not a historical series of refreshes.
+
+Backups can be up to **100 MB**, including view preferences. The server snapshot is limited to 98 MB to reserve room for those preferences. Transfers use 512 KB binary chunks, with private staging that expires after one hour and is removed on subsequent transfer operations. Validation and final restore run on the server; applying an import is one database transaction, and retrying a committed import is safe.
+
+For existing installations, apply **`20261025000000_workspace_transfer.sql`** before using these controls. The original four migrations must already be present. CSV exports remain available for reporting and cannot be used as workspace backups.
+
 ## Accounts and admin access
 
 | Route | Access |
@@ -133,6 +152,7 @@ The current limits are **100 collections**, **500 unique pages per user**, and *
 | `/dashboard` | Signed-in user's own workspace |
 | `/reset-password` | Authenticated password recovery |
 | `/api/account`, `/api/desk`, `/api/refresh` | Authenticated backend operations with ownership checks |
+| `/api/transfer` | Owner-bound workspace backups, validation, and imports |
 | `/admin` and `/api/admin` | Stored `public.users.user_type = 'admin'` role |
 
 New accounts start as `user`. To create the first admin, register, sign in, and identify your verified account's UUID in `public.users`. Then run the following in the Supabase SQL Editor, replacing the placeholder with that exact UUID:

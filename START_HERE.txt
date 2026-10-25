@@ -4,7 +4,7 @@ This folder contains the complete standalone Next.js source for deployment on Ve
 
 1. Extract the ZIP first (do not run files inside the ZIP).
 2. Open this folder in your editor. You should see app, components, lib, supabase, package.json, and DEPLOYMENT.md.
-3. Follow DEPLOYMENT.md to create your Supabase project, apply all four migrations in chronological order, and configure environment variables.
+3. Follow DEPLOYMENT.md to create your Supabase project, apply all five migrations in chronological order, and configure environment variables.
 4. Install Node.js 22. Run npm ci in this folder to download the dependencies.
 5. Run npm run dev for local development, or connect the folder to a Git repository and deploy with Vercel.
 

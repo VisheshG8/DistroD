@@ -50,12 +50,12 @@ export function guard(request:Request){
   const origin=request.headers.get('origin');
   if((origin&&origin!==new URL(request.url).origin)||request.headers.get('sec-fetch-site')==='cross-site')throw new ApiError('This request must come from your workspace.',403);
 }
-export async function body(request:Request):Promise<Record<string,any>>{
-  const length=Number(request.headers.get('content-length')||0);if(length>40000)throw new ApiError('This request is too large.',413);
+export async function body(request:Request,maxBytes=40000):Promise<Record<string,any>>{
+  const length=Number(request.headers.get('content-length')||0);if(length>maxBytes)throw new ApiError('This request is too large.',413);
   // Bound the stream as well as Content-Length, which may be absent or forged.
   if(!request.body)throw new ApiError('Invalid request.');
   const reader=request.body.getReader();const parts:Uint8Array[]=[];let size=0;
-  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>40000){await reader.cancel();throw new ApiError('This request is too large.',413);}parts.push(value);}}
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>maxBytes){await reader.cancel();throw new ApiError('This request is too large.',413);}parts.push(value);}}
   finally{reader.releaseLock();}
   const raw=new TextDecoder().decode(Buffer.concat(parts));
   try{const value:unknown=JSON.parse(raw);if(!value||typeof value!=='object'||Array.isArray(value))throw new Error();return value as Record<string,any>;}
@@ -66,7 +66,7 @@ export function fail(error:unknown){
   if(error instanceof ApiError)return json({error:error.message},error.status);
   const code=error&&typeof error==='object'&&'code' in error?String(error.code):'';
   if(code==='23505')return json({error:'This item already exists. Reload your workspace and retry.'},409);
-  if(['22P02','23514','23503'].includes(code))return json({error:'That change contains invalid or unavailable data.'},400);
+  if(['22P02','22023','22003','22007','22008','22P05','23514','23503'].includes(code))return json({error:'That change contains invalid or unavailable data.'},400);
   // Do not return SQL, connection strings, provider keys, or database error details.
   return json({error:'Something went wrong. Your saved data is safe; please retry.'},500);
 }
