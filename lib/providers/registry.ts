@@ -4,17 +4,18 @@ import { lamatok } from './lamatok';
 import { youtubeOfficial } from './youtube-official';
 import { tikhub } from './tikhub';
 import { scrapecreators } from './scrapecreators';
+import { instagramLooter } from './instagram-looter';
 import { normalizeScope } from './shared';
 import { isTerminalProviderError, ProviderError } from './types';
 import type { ProviderId, ProviderRequest, Scope, SocialDataProvider, SocialFetchResult } from './types';
 
 export const DEFAULT_PROVIDER_ORDER: Record<Platform, ProviderId[]> = {
-  instagram: ['hikerapi', 'tikhub', 'scrapecreators'],
+  instagram: ['hikerapi', 'tikhub', 'scrapecreators', 'instagram-looter'],
   tiktok: ['lamatok', 'tikhub', 'scrapecreators'],
   youtube: ['youtube-official', 'tikhub', 'scrapecreators'],
 };
 export const PROVIDERS: Readonly<Record<ProviderId, SocialDataProvider>> = {
-  hikerapi, lamatok, 'youtube-official': youtubeOfficial, tikhub, scrapecreators,
+  hikerapi, lamatok, 'youtube-official': youtubeOfficial, tikhub, scrapecreators, 'instagram-looter': instagramLooter,
 };
 export function providerIsSupported(provider: string, platform: string): provider is ProviderId {
   return Object.hasOwn(PROVIDERS, provider) && PROVIDERS[provider as ProviderId].platforms.includes(platform as Platform);

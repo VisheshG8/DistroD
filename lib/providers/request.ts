@@ -6,6 +6,7 @@ import type { ProviderRequest } from './types';
 const HOSTS: Readonly<Record<string, readonly string[]>> = {
   hikerapi: ['api.hikerapi.com'], lamatok: ['api.lamatok.com'],
   'youtube-official': ['www.googleapis.com'], tikhub: ['api.tikhub.io'], scrapecreators: ['api.scrapecreators.com'],
+  'instagram-looter': ['instagram-looter2.p.rapidapi.com'],
 };
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_LOG_BYTES = 32 * 1024;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {Script} from 'node:vm';
+import {createCipheriv,createDecipheriv,randomBytes} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
 import {parsePage} from '../lib/pages.ts';
 import {postDates,scopeKey,storedScope,scopeFromDates} from '../lib/scope.ts';
@@ -27,7 +28,7 @@ async function fixture(){
       create schema auth;create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
       create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
       grant usage on schema auth to authenticated;grant execute on function auth.uid() to authenticated;`);
-    for(const file of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql']){
+    for(const file of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql','20261026020000_analytics_transfer.sql','20261026030000_instagram_looter_performance.sql']){
       await pg.exec(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
     }
     await pg.query(`insert into auth.users(id,email)values($1,'user@example.test'),($2,'other@example.test'),($3,'admin@example.test'),($4,'empty@example.test')`,[user,other,admin,empty]);
@@ -42,9 +43,10 @@ async function fixture(){
     const state={now:Date.parse('2026-10-25T12:00:00Z'),authUser:{userId:user,email:'user@example.test',displayName:'user@example.test'},refreshes:[],refreshError:null,clientUrls:[],failMembershipOffset:null};
     const {client:db,calls}=testSupabase(pg);
     class ClockDate extends Date{constructor(...args){super(...(args.length?args:[state.now]));}static now(){return state.now;}}
-    const base={Date:ClockDate,URL,URLSearchParams,Response,Request,Buffer,TextDecoder,Uint8Array,postDates,scopeKey,storedScope,scopeFromDates,
-      connectDatabase:()=>db,getCurrentUser:async()=>state.authUser,encryptSecret:()=>{throw new Error('No keys in API tests');},decryptSecret:()=>{throw new Error('No keys in API tests');}};
-    const server=loadTs('../lib/server.ts',['ApiError','body','database','query','fail','guard','json','owner','currentAccount','requireAdmin'],base);
+    const secrets=loadTs('../lib/crypto.ts',['encryptSecret','decryptSecret'],{createCipheriv,createDecipheriv,randomBytes,Buffer,process:{env:{APP_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')}}});
+    const base={Date:ClockDate,URL,URLSearchParams,Response,Request,Buffer,TextDecoder,Uint8Array,AbortController,DOMException,postDates,scopeKey,storedScope,scopeFromDates,
+      connectDatabase:()=>db,getCurrentUser:async()=>state.authUser,...secrets};
+    const server=loadTs('../lib/server.ts',['ApiError','body','database','query','fail','guard','json','owner','currentAccount','requireAdmin','encrypt','decrypt'],base);
     const metrics=loadTs('../lib/analytics/metrics.ts',['alertCandidates','rangeForPreset'],base);
     const analytics=loadTs('../lib/analytics/server.ts',['analyticsChunk','analyticsPost','reconcileWorkspaceAlerts'],{...base,...server,...metrics,...input});
     const refreshWorkspacePage=async(ownerId,pageId,scope)=>{state.refreshes.push({ownerId,pageId,scope:plain(scope)});if(state.refreshError)throw state.refreshError;return {page:{id:pageId}};};
@@ -219,15 +221,49 @@ test('admin endpoints rely on the stored role, assign across owners, redact logs
       ('tikhub','youtube','/profile','workspace',$2,true,100,0,'{"secret":"private-workspace-payload"}',null)`,[admin,other]);
     result=await f.adminGet();assert.equal(result.response.status,200,JSON.stringify(result.body));assert.equal(result.body.requests.length,2);assert.equal(result.body.usage.totals.requests,1);assert.equal(result.body.keys.hikerapi,true);assert.equal(result.body.keys.lamatok,false);assert.equal(result.body.schedulerConfigured,true);
     assert.equal(JSON.stringify(result.body).includes('private-'),false,'admin response exposes key presence and safe log metadata only');assert.ok(result.body.requests.every(r=>!Object.hasOwn(r,'raw_response')&&!Object.hasOwn(r,'error')&&!Object.hasOwn(r,'owner')));
-    const settings={action:'saveProviderSettings',providerOrder:{instagram:['hikerapi','tikhub'],youtube:['youtube-official'],tiktok:['lamatok','tikhub']},monthlyRequestCap:25000,monthlyBudgetUsd:25,refreshIntervalHours:24,refreshEnabled:true,requestCosts:{'youtube-official':0,hikerapi:0.02,lamatok:0.02,tikhub:0.001,scrapecreators:0.001}};
+    const settings={action:'saveProviderSettings',providerOrder:{instagram:['instagram-looter','hikerapi','tikhub'],youtube:['youtube-official'],tiktok:['lamatok','tikhub']},monthlyRequestCap:25000,monthlyBudgetUsd:25,refreshIntervalHours:24,refreshEnabled:true,requestCosts:{'youtube-official':0,hikerapi:0.02,lamatok:0.02,tikhub:0.001,scrapecreators:0.001,'instagram-looter':0.00066}};
     result=await f.adminMutate(settings);assert.equal(result.response.status,200,JSON.stringify(result.body));
-    for(const bad of [{monthlyBudgetUsd:25.01},{monthlyRequestCap:0},{refreshIntervalHours:0},{refreshEnabled:'true'},{providerOrder:{...settings.providerOrder,instagram:['hikerapi','hikerapi']}},{requestCosts:{...settings.requestCosts,lamatok:0}},{requestCosts:{...settings.requestCosts,hikerapi:0.00000001}}]){
+    for(const bad of [{monthlyBudgetUsd:25.01},{monthlyRequestCap:0},{refreshIntervalHours:0},{refreshEnabled:'true'},{providerOrder:{...settings.providerOrder,instagram:['hikerapi','hikerapi']}},{providerOrder:{...settings.providerOrder,youtube:['instagram-looter']}},{providerOrder:{...settings.providerOrder,tiktok:['instagram-looter']}},{requestCosts:{...settings.requestCosts,'instagram-looter':0}},{requestCosts:{...settings.requestCosts,lamatok:0}},{requestCosts:{...settings.requestCosts,hikerapi:0.00000001}}]){
       result=await f.adminMutate({...settings,...bad});assert.equal(result.response.status,400,JSON.stringify(bad));
     }
     const config=(await f.pg.query('select monthly_request_cap,monthly_budget_usd,refresh_enabled from public.provider_settings')).rows[0];assert.equal(config.monthly_request_cap,25000);assert.equal(Number(config.monthly_budget_usd),25);assert.equal(config.refresh_enabled,true);
     result=await f.adminMutate({action:'removePage',ownerId:other,pageId:assigned});assert.equal(result.response.status,200,JSON.stringify(result.body));assert.equal((await f.pg.query('select id from public.pages where id=$1',[assigned])).rows.length,0);
     await f.pg.query("update public.users set user_type='user' where id=$1",[admin]);result=await f.adminGet();assert.equal(result.response.status,403,'revoking the database role takes effect on the next request');
     assert.equal((await f.pg.query('select user_type from public.users where id=$1',[admin])).rows[0].user_type,'user','auth profile repair never restores privileges');
+  }finally{await f.close();}
+});
+
+test('shared RapidAPI credentials are admin-only, encrypted, replaceable and never returned',async()=>{
+  const f=await fixture();try{
+    const key='synthetic-rapidapi-key-for-integration-test';
+    let result=await f.adminMutate({action:'saveRapidApiKey',rapidApiKey:key,userType:'admin'});
+    assert.equal(result.response.status,403);assert.equal(f.calls.some(c=>c.path.endsWith('/provider_settings')),false);
+    f.state.authUser=null;result=await f.adminMutate({action:'saveRapidApiKey',rapidApiKey:key});assert.equal(result.response.status,401);
+    f.signIn(admin);
+    const before=(await f.pg.query('select provider_order,refresh_enabled from public.provider_settings')).rows[0];
+    result=await f.adminMutate({action:'saveRapidApiKey',rapidApiKey:'  '+key+'  '});
+    assert.equal(result.response.status,200,JSON.stringify(result.body));assert.deepEqual(result.body,{ok:true,hasRapidApiKey:true});
+    const stored=(await f.pg.query('select rapidapi_key,provider_order,refresh_enabled from public.provider_settings')).rows[0];
+    assert.match(stored.rapidapi_key,/^v1\./);assert.notEqual(stored.rapidapi_key,key);assert.equal(stored.rapidapi_key.includes(key),false);
+    assert.equal(await f.server.decrypt(stored.rapidapi_key),key);assert.deepEqual(stored.provider_order,before.provider_order);assert.equal(stored.refresh_enabled,before.refresh_enabled);
+    result=await f.adminGet();assert.equal(result.response.status,200);assert.equal(result.body.keys['instagram-looter'],true);
+    assert.equal(Object.hasOwn(result.body.settings,'rapidapi_key'),false);assert.equal(JSON.stringify(result.body).includes(key),false);assert.equal(JSON.stringify(result.body).includes(stored.rapidapi_key),false);
+    assert.ok(f.calls.filter(c=>c.path.endsWith('/provider_settings')&&c.method==='GET').every(c=>new URLSearchParams(c.search).get('select')!=='*'),'settings responses use explicit projections');
+    result=await f.adminMutate({action:'saveRapidApiKey',rapidApiKey:''});assert.equal(result.response.status,200);assert.equal(result.body.hasRapidApiKey,true);
+    assert.equal((await f.pg.query('select rapidapi_key from public.provider_settings')).rows[0].rapidapi_key,stored.rapidapi_key,'blank preserves the exact saved encrypted key');
+    for(const bad of [{rapidApiKey:23},{rapidApiKey:'bad\nkey'},{rapidApiKey:'x'.repeat(2001)},{rapidApiKey:key,clearRapidApiKey:true},{clearRapidApiKey:'true'}]){
+      result=await f.adminMutate({action:'saveRapidApiKey',...bad});assert.equal(result.response.status,400,JSON.stringify(bad));
+    }
+    result=await f.adminMutate({action:'saveRapidApiKey',rapidApiKey:'replacement-synthetic-key'});assert.equal(result.response.status,200);
+    assert.equal(await f.server.decrypt((await f.pg.query('select rapidapi_key from public.provider_settings')).rows[0].rapidapi_key),'replacement-synthetic-key');
+    const calls=f.calls.length;result=await f.adminMutate({action:'saveRapidApiKey',clearRapidApiKey:true},{origin:'https://evil.test'});
+    assert.equal(result.response.status,403);assert.equal(f.calls.length,calls,'cross-site writes are rejected before database work');
+    await f.pg.query("update public.users set user_type='user' where id=$1",[admin]);
+    result=await f.adminMutate({action:'saveRapidApiKey',clearRapidApiKey:true});assert.equal(result.response.status,403,'revoked administrators cannot remove a saved key');
+    await f.pg.query("update public.users set user_type='admin' where id=$1",[admin]);
+    result=await f.adminMutate({action:'saveRapidApiKey',clearRapidApiKey:true});assert.equal(result.response.status,200);assert.equal(result.body.hasRapidApiKey,false);
+    assert.equal((await f.pg.query('select rapidapi_key from public.provider_settings')).rows[0].rapidapi_key,'');
+    result=await f.adminGet();assert.equal(result.body.keys['instagram-looter'],false);
   }finally{await f.close();}
 });
 

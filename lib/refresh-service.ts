@@ -83,6 +83,17 @@ export async function refreshWorkspacePage(user: string, pageId: unknown, scopeI
     const keys = getConfiguredKeys();
     const configuredOrder = (config?.provider_order as Record<string, unknown> | undefined)?.[String(page.platform)];
     const providerOrder = Array.isArray(configuredOrder) ? configuredOrder.filter((value): value is string => typeof value === 'string') : DEFAULT_PROVIDER_ORDER[String(page.platform) as keyof typeof DEFAULT_PROVIDER_ORDER] || [];
+    // Only decrypt a shared key for its selected platform; an unused or damaged
+    // credential must not interfere with another platform's refresh.
+    if (page.platform === 'instagram' && providerOrder.includes('instagram-looter') && config?.rapidapi_key) {
+      try { keys['instagram-looter'] = await decrypt(config.rapidapi_key); }
+      catch (error) {
+        // A damaged fallback credential must not disable a healthy shared
+        // provider. With no shared alternative, fail instead of spending an
+        // owner's personal key in response to an administrator's broken key.
+        if (!providerOrder.some(id => id !== 'instagram-looter' && Boolean(keys[id]?.trim()))) throw error;
+      }
+    }
     const centrallyFunded = providerOrder.some(id => Boolean(keys[id]));
     if (centrallyFunded && !config) throw new ApiError('Apply the analytics history migration before using the configured shared providers.', 503);
     let order = providerOrder;

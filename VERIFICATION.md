@@ -1,5 +1,25 @@
 # Verification
 
+## Instagram Looter and performance update — 2026-10-26
+
+`node --test tests/*.test.mjs` passed **232 tests, zero failures, zero skipped**. The full run includes the existing authentication, tenant isolation, backup/import, admin and provider regressions alongside:
+
+- Instagram-only Looter registration, exact HTTPS host/header handling, native ID precision, missing/rounded counters, pinned-post ordering, date ranges, private/wrong accounts, malformed responses and incomplete pagination.
+- Real AES-GCM admin save/replace/blank-preserve/remove, CSRF and stored-role checks, no plaintext/ciphertext in returned settings, and no automatic provider switch or scheduling change.
+- Manual and cron use of the dashboard key through the shared request service, cross-owner public cache reuse, request/cost caps, credential removal, corrupt fallback isolation, and preserved personal-provider behavior.
+- The tenth migration's historical usage backfill, UTC month/funding/cost corrections, deletions, rollback, browser-role denials and cap reservation. PGlite serializes queued calls; this is not a multi-session production contention benchmark.
+- Seeded query plans with 16,000 posts, 24,000 account snapshots, 48,000 post snapshots, 2,000 alerts, 1,600 memberships, 5,000 shared accounts and 15,000 logs. Ordered queries select the matching indexes without an additional Sort; retention finds only the ten retained raw-response rows in its fixture.
+- Parallel analytics loads retain all 1,001 posts, reduce sequential network wait rounds from seven to three, cap concurrency at three, abort sibling requests on failure/cancellation and reject inconsistent continuation/cutoff data. Legacy cursor clients remain compatible.
+- Calculator caches preserve full report equality, owner-dataset isolation, clock changes, filtered alerts, full-workspace health scores and long-range chart alignment.
+
+The synthetic calculation benchmark used 48 pages, 8,640 posts, 75,792 post snapshots and 9,648 account snapshots. Median of three runs with the same native-module loading: **2,351.5 ms before → 713.6 ms after** (about 70% less calculation time), with exact full-report equality. Filtering the prepared history to 24 pages took 171.9 ms. These are local calculation measurements, not hosted page-load guarantees. Run `node scripts/benchmark-analytics.mjs` for current-code timings; pass a saved earlier `metrics.ts` as the optional first argument for before/after comparison.
+
+The public-env guard and TypeScript checks pass. `node node_modules/next/dist/bin/next build --webpack` passed compilation, TypeScript, route generation and tracing. A fresh production server rendered `/demo`; Instagram filtering, page search, date comparisons and monthly reports worked with no browser warning/error logs. Desktop and 390-pixel mobile checks of a synthetic server-rendered provider console verified readable key/provider forms, no document horizontal overflow, a 16px mobile password input and clear removal controls. The four interaction tests cover success/failure behavior; the static preview does not claim a live authenticated browser save. Temporary preview servers/tabs were closed.
+
+Request URLs and parameters were verified in the [provider's public playground](https://rapidapi.com/irrors-apis/api/instagram-looter2/playground): `/web-profile?username=...` and `/user-feeds?id=...&count=...&max_id=...`. It exposes **no example responses** for these endpoints. Tests use explicitly synthetic native Instagram response fixtures, not captured live Looter responses. A subscribed live smoke test remains required to verify those response envelopes and available counters. Wait for the existing five-minute workspace cache to expire, or use a newly tracked public account; confirm new Looter entries appear in the admin request log.
+
+No hosted migration, provider subscription, paid request or production deployment was performed. Apply `20261026030000_instagram_looter_performance.sql` before deploying, then save/select Looter and perform the live checks in [DEPLOYMENT.md](./DEPLOYMENT.md). The migration takes write locks while creating indexes/backfilling; use a quiet window.
+
 ## V2 local validation
 
 The V2 work adds provider adapters and scheduling, owner-scoped historical analytics, page metadata and admin operations, a new analytics interface, and extended workspace backups. Validation uses synthetic fixtures, the real Supabase SDK, and PGlite running the actual SQL migrations. These checks do not touch a hosted database.
@@ -30,10 +50,10 @@ Local desktop and 390-pixel mobile browser checks covered all seven analytics se
 
 No live Supabase migration, paid provider request, or Vercel deployment was performed by the local build work. There is no new live deployment URL to report. The following still require the owner's configured projects:
 
-- Applying only missing migrations from the nine-file sequence in [DEPLOYMENT.md](./DEPLOYMENT.md).
+- Applying only missing migrations from the ten-file sequence in [DEPLOYMENT.md](./DEPLOYMENT.md).
 - Supabase Data API connectivity, email confirmation/recovery delivery, and optional Google sign-in.
 - Real vendor credentials, purchased price tiers, public/private/not-found responses, endpoint coverage, and invoices.
-- A Vercel plan supporting the configured hourly cron, a valid `CRON_SECRET`, and real queue throughput within function limits.
+- The configured daily cron (supported on Hobby), a valid `CRON_SECRET`, and real queue throughput within function limits; a more frequent scheduler requires appropriate hosting.
 - Two-account isolation and SQL-designated admin access on the deployed services, including role revocation.
 - A hosted full-backup round trip between accounts, including browser preferences, after all migrations are applied.
 

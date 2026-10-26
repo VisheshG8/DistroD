@@ -19,11 +19,11 @@ For an optional developer JSON fixture: `node scripts/seed-demo.mjs --output ./d
 ## Set up real accounts
 
 1. For a **new installation**, copy `.env.example` to `.env.local` and fill in the Supabase public/server keys, application origin, and stable encryption key. For an **existing installation**, keep your current `.env.local` and keys; add only missing values from the example. Do not replace or regenerate the encryption key.
-2. Apply missing SQL migrations from [DEPLOYMENT.md](./DEPLOYMENT.md), in order, once. **If the first six migrations are already applied, only three new files are needed:** `20261026010000_analytics_history.sql`, `20261026015000_analytics_operations.sql`, and `20261026020000_analytics_transfer.sql`. A fresh database needs all nine.
+2. Apply missing SQL migrations from [DEPLOYMENT.md](./DEPLOYMENT.md), in order, once. **If you already ran the three V2 migrations, only one new file is needed:** `20261026030000_instagram_looter_performance.sql`. Apply it before deploying this update, during a quiet period because index creation briefly blocks writes. A fresh database needs all ten.
 3. Configure Supabase email and callback URLs. Run `npm run check:env`, then sign up at `/login`.
 4. Open `/dashboard` for analytics or `/collections` for collections, bulk entry, and backups.
 5. To make your own verified account an admin, change `public.users.user_type` to `admin` for its exact UUID in Supabase. The SQL example is in [DEPLOYMENT.md](./DEPLOYMENT.md). No login or registration option grants admin access.
-6. Set server provider keys and review `/admin/providers`. Test one small refresh before enabling automatic refresh.
+6. For Instagram, subscribe to [Instagram Looter](https://rapidapi.com/irrors-apis/api/instagram-looter2/), save its RapidAPI key in `/admin/providers`, select it as the Instagram primary source, and save settings. Set limits for your plan and test one small refresh before enabling automatic refresh. Other shared providers retain their server environment keys.
 
 Scheduled refresh starts **paused**. The default daily Vercel cron supports the Hobby plan. Before enabling it, configure shared provider keys, a `CRON_SECRET` of at least 32 characters, and actual provider rates; the shared estimated budget defaults to $25/month. Each daily run attempts at most 50 shared accounts within roughly 220 seconds, so larger queues may take several days. Manual refresh remains available. See [DEPLOYMENT.md](./DEPLOYMENT.md) for more frequent scheduling options.
 

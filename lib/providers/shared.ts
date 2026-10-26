@@ -90,9 +90,14 @@ export async function collectPosts(options: {
     hasMore = feed.hasMore;
     if (truncated) { partial = true; stopReason = 'scan-limit'; break; }
     if (!hasMore) { stopReason = 'exhausted'; break; }
-    if (scope.mode === 'posts' && found.size >= scope.postLimit) { stopReason = 'post-limit'; break; }
+    const ordinary = added.filter(post => !post.isPinned);
+    // A changed timestamp schema cannot establish chronological coverage. Stop
+    // this partial result instead of spending the entire pagination allowance.
+    if (ordinary.length > 0 && ordinary.every(post => !post.publishedAt)) { partial = true; stopReason = 'unknown-dates'; break; }
+    // Old pinned posts appear before the chronological feed. They must not make
+    // us stop before we have seen the requested number of ordinary recent posts.
+    if (scope.mode === 'posts' && [...found.values()].filter(post => !post.isPinned && post.publishedAt).length >= scope.postLimit) { stopReason = 'post-limit'; break; }
     if (scope.mode === 'date') {
-      const ordinary = added.filter(post => !post.isPinned);
       olderPages = ordinary.length > 0 && ordinary.every(post => !!post.publishedAt && post.publishedAt < scope.from!) ? olderPages + 1 : 0;
       if (olderPages >= 2) { stopReason = 'range-covered'; break; }
     }
@@ -106,7 +111,8 @@ export async function collectPosts(options: {
   const posts = scope.mode === 'date'
     ? all.filter(post => post.publishedAt && post.publishedAt >= scope.from! && post.publishedAt < scope.to!)
     : all.slice(0, scope.postLimit);
-  const complete = !partial && skippedPosts === 0 && (scope.mode === 'posts' || unknownDates === 0);
+  const complete = !partial && skippedPosts === 0 && unknownDates === 0;
+  hasMore ||= scope.mode === 'posts' && all.length > scope.postLimit;
   const dated = all.flatMap(post => post.publishedAt ? [post.publishedAt] : []);
   const notes = ['Only public counters returned by the provider are shown; missing counters remain unavailable.'];
   if (partial) notes.push('Pagination stopped early. The fetched posts are retained; retry to finish the requested coverage.');

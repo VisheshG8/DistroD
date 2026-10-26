@@ -4,9 +4,9 @@ The app uses Next.js, Supabase Auth/PostgreSQL, and the Supabase SDK over HTTPS.
 
 ## 1. Apply database migrations
 
-For a new Supabase project, run all nine files once, in this order. For an existing installation, run only the files that have not already been applied.
+For a new Supabase project, run all ten files once, in this order. For an existing installation, run only the files that have not already been applied.
 
-**Upgrading an installation with the first six migrations already applied:** run only `20261026010000_analytics_history.sql`, then `20261026015000_analytics_operations.sql`, then `20261026020000_analytics_transfer.sql`.
+**If you already ran the three V2 migrations:** apply only `20261026030000_instagram_looter_performance.sql`. If only the first six are applied, run files 7–10 below in order.
 
 | Order | Migration | Purpose |
 |---:|---|---|
@@ -19,6 +19,9 @@ For a new Supabase project, run all nine files once, in this order. For an exist
 | 7 | [20261026010000_analytics_history.sql](./supabase/migrations/20261026010000_analytics_history.sql) | Page metadata, history, alerts, shared cache, and provider operations |
 | 8 | [20261026015000_analytics_operations.sql](./supabase/migrations/20261026015000_analytics_operations.sql) | Owner-safe page creation/assignment and metadata operations |
 | 9 | [20261026020000_analytics_transfer.sql](./supabase/migrations/20261026020000_analytics_transfer.sql) | Metadata/history/alert backup and restore, compatible with old backups |
+| 10 | [20261026030000_instagram_looter_performance.sql](./supabase/migrations/20261026030000_instagram_looter_performance.sql) | Encrypted RapidAPI key, ordered query indexes and transactional monthly provider counters |
+
+Apply file 10 before deploying this version. It preserves existing provider selections and scheduling. Run it during a quiet period: index creation and counter backfill take write locks. It is a transaction, so a failure rolls back its changes. Let it complete before retrying; inspect the error first. It does not delete customer records or old migration history.
 
 Use the SQL Editor, or a consistently tracked Supabase CLI migration workflow:
 
@@ -53,9 +56,9 @@ Generate the encryption key once and store it securely:
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-Changing it makes saved personal provider keys unreadable unless they are re-encrypted or entered again. This is separate from Supabase and provider credentials.
+Changing it makes saved personal provider keys and the shared RapidAPI key unreadable unless they are re-encrypted or entered again. This is separate from Supabase and provider credentials.
 
-Shared fetches use server-only `YOUTUBE_API_KEY`, `HIKERAPI_KEY`, `LAMATOK_KEY`, and optional `TIKHUB_KEY`/`SCRAPECREATORS_KEY`. Add only the keys you intend to use. Admin pages show whether a key is configured, never its value. No provider key, Supabase server secret, encryption key, or cron token belongs in a `NEXT_PUBLIC_*` variable.
+Instagram Looter uses the **RapidAPI key saved in `/admin/providers`**; no new environment variable is required. Other shared fetches use server-only `YOUTUBE_API_KEY`, `HIKERAPI_KEY`, `LAMATOK_KEY`, and optional `TIKHUB_KEY`/`SCRAPECREATORS_KEY`. Add only the keys you intend to use. Admin pages show whether a key is configured, never its value. No provider key, Supabase server secret, encryption key, or cron token belongs in a `NEXT_PUBLIC_*` variable.
 
 ```sh
 npm ci
@@ -118,6 +121,15 @@ Reload the app. `/admin` shows people, collections, and pages, with page assignm
 Signup, login, editable Auth metadata, and backup files cannot grant admin. There is no email-list bootstrap, role editor, View tier, subscription gating, or impersonation.
 
 ## 6. Review provider rates and enable scheduling
+
+For Instagram Looter:
+
+1. Open [the selected API](https://rapidapi.com/irrors-apis/api/instagram-looter2/) in your own RapidAPI account and choose a plan. Review the subscription, request limit, overage and bandwidth terms there.
+2. In `/admin/providers`, paste the RapidAPI key into **Instagram Looter** and save it. It is encrypted using your existing `APP_ENCRYPTION_KEY`. A blank field leaves the saved key unchanged; **Remove saved key** clears it explicitly.
+3. Choose **Instagram Looter (RapidAPI)** as the Instagram primary provider and save settings. Keep only fallbacks you intend to pay for. Saving the key alone does not change the order or enable scheduling.
+4. Set the monthly request cap to fit your plan. The seeded `$0.000660` request estimate is a planning allocation, not a per-call invoice or a cap on subscription/overage/bandwidth fees. App and provider billing-month boundaries can differ.
+5. Refresh one public Instagram account with a small post limit. Check the profile, publication order, pinned posts, counts, coverage label and request logs. Compare with Instagram and test a private/nonexistent handle. Public provider docs have no example responses, so this live check is required before enabling scheduled collection.
+6. Confirm a second user sees only their own saved data and that neither API responses nor workspace backups contain the key. Then configure scheduling below if wanted.
 
 Before the first paid refresh, visit `/admin/providers` and set provider order, fallback order, request prices, the monthly request cap, and estimated budget. Defaults are 25,000 attempts/month, a $25 estimated budget, 24-hour refresh intervals, and scheduling **paused**. HikerAPI/LamaTok default to $0.02/request; verify your purchased tier before changing them. Cost examples and vendor links are in [README.md](./README.md).
 

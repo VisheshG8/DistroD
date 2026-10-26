@@ -49,7 +49,7 @@ npm ci
 Copy-Item .env.example .env.local
 ```
 
-For an existing installation, keep `.env.local` and its current keys, especially `APP_ENCRYPTION_KEY`; add only missing variables from the example. Fill in configuration and apply the migration sequence in [DEPLOYMENT.md](./DEPLOYMENT.md). Existing databases need **only missing migrations, once, in filename order**. If the first six are applied, add only `20261026010000_analytics_history.sql`, `20261026015000_analytics_operations.sql`, and `20261026020000_analytics_transfer.sql`. A fresh database needs all nine. Do not rerun the initial schema or edit an already-applied migration.
+For an existing installation, keep `.env.local` and its current keys, especially `APP_ENCRYPTION_KEY`; add only missing variables from the example. Fill in configuration and apply the migration sequence in [DEPLOYMENT.md](./DEPLOYMENT.md). Existing databases need **only missing migrations, once, in filename order**. If you already applied the three V2 migrations through `20261026020000_analytics_transfer.sql`, apply only the new `20261026030000_instagram_looter_performance.sql`. A fresh database needs all ten. Do not rerun the initial schema or edit an already-applied migration.
 
 ```powershell
 npm run check:env
@@ -71,20 +71,26 @@ Copy [.env.example](./.env.example). Only variables beginning with `NEXT_PUBLIC_
 | `NEXT_PUBLIC_APP_URL` | Application origin; HTTPS in production |
 | `NEXT_PUBLIC_ENABLE_GOOGLE_AUTH` | `false` unless Google is configured in Supabase |
 | `SUPABASE_SECRET_KEY` | Server-only secret; legacy `SUPABASE_SERVICE_ROLE_KEY` is supported |
-| `APP_ENCRYPTION_KEY` | Stable 32-byte base64 key for encrypted workspace provider keys |
+| `APP_ENCRYPTION_KEY` | Stable 32-byte base64 key for encrypted workspace and shared RapidAPI keys |
 | `HIKERAPI_KEY` | Shared Instagram provider key |
 | `LAMATOK_KEY` | Shared TikTok provider key |
 | `YOUTUBE_API_KEY` | Official YouTube Data API v3 key |
 | `TIKHUB_KEY` / `SCRAPECREATORS_KEY` | Optional fallback keys |
 | `CRON_SECRET` | Random server-only token, at least 32 characters, for scheduled refresh |
 
-All provider keys are server-only. Admin settings change order and limits, not secret values. If shared providers are unavailable, Collections retains encrypted personal provider settings for manual refresh. Those requests are labelled workspace-funded and do not consume the shared estimated-dollar budget. Scheduled refresh requires shared keys.
+All provider keys are server-only. **Enter the Instagram Looter RapidAPI key in `/admin/providers`**, where it is encrypted before storage and never displayed again. There is no RapidAPI environment variable to add. Other shared provider keys still use the server environment. If shared providers are unavailable, Collections retains encrypted personal provider settings for manual refresh. Those requests are labelled workspace-funded and do not consume the shared estimated-dollar budget. Scheduled refresh requires shared keys.
 
 There is no `ADMIN_EMAILS` role bootstrap or payment-provider configuration. Sign up normally, verify the account, then change that exact `public.users` row as described in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Providers, refreshes, and costs
 
-Fetches use `lib/social-provider.ts` and the shared refresh service. Adapters cover official YouTube, HikerAPI, LamaTok, TikHub, and ScrapeCreators. The database chooses the ordered provider list; unconfigured adapters are skipped. The request boundary handles timeouts, one retry with backoff, pacing, response limits, request reservations, and logs. Official YouTube uses uploads playlists and video endpoints rather than search queries.
+Fetches use `lib/social-provider.ts` and the shared refresh service. Adapters cover Instagram Looter (RapidAPI), official YouTube, HikerAPI, LamaTok, TikHub, and ScrapeCreators. The database chooses the ordered provider list; unconfigured adapters are skipped. The request boundary handles timeouts, one retry with backoff, pacing, response limits, request reservations, and logs. Official YouTube uses uploads playlists and video endpoints rather than search queries.
+
+To use [Instagram Looter](https://rapidapi.com/irrors-apis/api/instagram-looter2/), subscribe in your own RapidAPI account, save its key in **Admin → Data sources & refreshes**, choose it as Instagram's primary source, then save settings. Key storage alone does not select the provider or start scheduling. The adapter reads the public profile and paginates its media feed, sorts by publication time, handles pinned posts, and keeps unavailable counters as `null`. Private accounts and unrecognized payloads fail safely; pagination limits remain visible. Public saves, shares, reach, and historical follower counts are not invented.
+
+The new migration seeds a **$0.000660/request estimate** (the $9.90 Pro fee divided by 15,000 included requests when checked). Verify current [RapidAPI plans](https://rapidapi.com/irrors-apis/api/instagram-looter2/pricing) and set your own request cap/rate before use. Fixed subscriptions, overages, bandwidth, taxes, and calls made outside this app are not capped by the app's estimated budget. Public playground URLs and request parameters were checked; its response examples were absent. Native response mapping has fixture coverage and still needs a real account smoke test after subscribing.
+
+Analytics loads up to three independent history streams concurrently with a shared observation cutoff and fails the whole load if any stream fails. Snapshot preparation is reused across report calculations. Ordered tenant/history indexes support those queries, and private transactional monthly counters replace repeated full-log scans when reserving provider requests. Dataset sizes and request bounds remain enforced; these changes are not an unlimited-scale guarantee.
 
 The default shared budget is **$25/month estimated**, with a 25,000-request cap. HikerAPI and LamaTok default to **$0.02/request** conservatively. Set the actual rates for your purchased tier in `/admin/providers`. Reserved attempts count toward the estimate; it is not a vendor invoice or a guarantee of the final bill. Hosting, Supabase, taxes, prepaid deposits, and personal provider keys are separate.
 
@@ -122,7 +128,7 @@ npm run build
 
 The stack is Next.js App Router, React, strict TypeScript, Tailwind/custom CSS, Lucide, Supabase Auth/PostgreSQL, and SVG charts. Tests use Node's runner and PGlite with actual migrations and the Supabase SDK. Dependencies and scripts are in [package.json](./package.json).
 
-The V2 verification record includes 202 passing integrated tests, four additional passing rendering/CSV regressions, and a successful production webpack build. See [VERIFICATION.md](./VERIFICATION.md) for the exact runs and hosted checks still needed.
+The current integrated suite passes 232 tests, including Instagram Looter, encrypted admin credentials, tenant isolation, backups and database query-plan checks. A synthetic large-workspace benchmark reduced report calculation time by about 70% with identical results. See [VERIFICATION.md](./VERIFICATION.md) for the exact measurements and hosted checks still needed.
 
 For a repeatable developer fixture, run `node scripts/seed-demo.mjs --output ./demo-data.json --now 2026-10-25T12:00:00Z`. Omitting `--output` prints JSON. Existing output files are rejected. This generates a synthetic `AnalyticsDataset` locally without keys, network calls, or database writes; it is **not an importable workspace backup**. `/demo` uses the same generator automatically without a seed step. Keep generated fixtures outside commits unless they are intentional test assets.
 

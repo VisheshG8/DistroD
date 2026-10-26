@@ -52,7 +52,7 @@ export async function analyticsChunk(ownerId:string, params:URLSearchParams) {
     const collectionIds=pageMemberships ? new Set(pageMemberships.map(r=>String(r.collection_id))) : null;
     const collections=(collectionRows || []).filter(r=>!collectionIds || collectionIds.has(String(r.id))).map(r=>({id:string(r.id,100),name:string(r.name,100)}));
     const pages:AnalyticsPage[]=(rows || []).map(r=>({id:string(r.id),platform:r.platform as AnalyticsPage['platform'],handle:string(r.handle,100),url:url(r.url),name:string(r.name,300),followers:counter(r.followers),lastSyncedAt:date(r.last_synced_at),syncError:string(r.sync_error,500)||null,posts:[],monthlyPay:r.monthly_pay==null?null:Number(r.monthly_pay),editor:string(r.editor,150),startDate:typeof r.start_date==='string'?r.start_date.slice(0,10):null,active:r.active!==false,notes:string(r.notes),coverage:r.coverage&&typeof r.coverage==='object'?r.coverage as AnalyticsPage['coverage']:undefined}));
-    return {pages,collections,generatedAt:at,nextCursor:pages.length?encode('posts',0):null};
+    return {pages,collections,generatedAt:at,nextCursor:pages.length?encode('posts',0):null,parallelCursors:pages.length?stages.map(stage=>encode(stage,0)):[]};
   }
   const {stage,offset}=cursor;
   if(stage==='memberships'){
@@ -60,18 +60,21 @@ export async function analyticsChunk(ownerId:string, params:URLSearchParams) {
     let select=db.from('memberships').select('collection_id,page_id').eq('owner',ownerId).order('collection_id').order('page_id');
     if(window.pageId)select=select.eq('page_id',window.pageId);
     const rows=await query(select.range(offset,offset+BATCH-1)) as Row[];
-    return {generatedAt:at,memberships:rows.map(r=>({collectionId:string(r.collection_id,100),pageId:string(r.page_id,100)})),nextCursor:rows.length===BATCH?encode(stage,offset+BATCH):null};
+    const nextStageCursor=rows.length===BATCH?encode(stage,offset+BATCH):null;
+    return {generatedAt:at,memberships:rows.map(r=>({collectionId:string(r.collection_id,100),pageId:string(r.page_id,100)})),nextCursor:nextStageCursor,nextStageCursor};
   }
   const table=stage==='posts'?'page_posts':stage==='accounts'?'account_snapshots':stage==='snapshots'?'post_snapshots':'alerts';
-  let select=db.from(table).select('*').eq('owner',ownerId);
+  const columns:string=stage==='posts'?'post_id,page_id,payload,source_asset_id,observed_at':stage==='accounts'?'page_id,observed_at,followers,following,post_count':stage==='snapshots'?'page_id,post_id,observed_at,views,likes,comments,shares,saves':'id,page_id,level,type,title,details,created_at,resolved_at';
+  let select=db.from(table).select(columns).eq('owner',ownerId);
   if(window.pageId)select=select.eq('page_id',window.pageId);
   if(stage==='posts')select=select.lte('created_at',at).order('page_id').order('post_id');
   else if(stage==='alerts')select=select.lte('created_at',at).order('created_at').order('id');
   else select=select.gte('observed_at',window.start).lte('observed_at',at).order('page_id').order('observed_at');
   if(stage==='snapshots')select=select.order('post_id');
-  const rows=await query(select.range(offset,offset+BATCH-1)) as Row[];
+  const rows=await query(select.range(offset,offset+BATCH-1).returns<Row[]>());
   const next=stages[stages.indexOf(stage)+1];
-  const base={generatedAt:at,nextCursor:rows.length===BATCH?encode(stage,offset+BATCH):next?encode(next,0):null};
+  const nextStageCursor=rows.length===BATCH?encode(stage,offset+BATCH):null;
+  const base={generatedAt:at,nextCursor:nextStageCursor || (next?encode(next,0):null),nextStageCursor};
   if(stage==='posts')return {...base,posts:rows.map(analyticsPost)};
   if(stage==='accounts')return {...base,accountSnapshots:rows.map(r=>({pageId:string(r.page_id),observedAt:date(r.observed_at)!,followers:counter(r.followers),following:counter(r.following),postCount:counter(r.post_count)}))};
   if(stage==='snapshots')return {...base,postSnapshots:rows.map(r=>({pageId:string(r.page_id),postId:string(r.post_id,300),observedAt:date(r.observed_at)!,views:counter(r.views),likes:counter(r.likes),comments:counter(r.comments),shares:counter(r.shares),saves:counter(r.saves)}))};
@@ -94,6 +97,8 @@ export async function reconcileWorkspaceAlerts(ownerId:string, now=new Date()):P
     if(++chunks>200)return;
     params.set('cursor',chunk.nextCursor);
   } while(true);
-  for(const page of dataset.pages)page.posts=posts.filter(p=>p.pageId===page.id);
+  const grouped=new Map<string,AnalyticsPost[]>();
+  for(const post of posts){const list=grouped.get(post.pageId)||[];list.push(post);grouped.set(post.pageId,list);}
+  for(const page of dataset.pages)page.posts=grouped.get(page.id)||[];
   await query(database().rpc('desk_reconcile_alerts',{p_owner:ownerId,p_candidates:alertCandidates(dataset,now),p_observed_at:now.toISOString()}));
 }

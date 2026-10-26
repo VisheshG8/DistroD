@@ -8,7 +8,7 @@ import { downloadFile } from '@/lib/workspace-transfer';
 import { parsePage } from '@/lib/pages';
 import { PRODUCT_NAME } from '@/lib/product';
 import { loadAnalyticsDataset } from '@/lib/analytics/client';
-import { calculateHealthScores, calculateWorkspace, previousRange, rangeForPreset } from '@/lib/analytics/metrics';
+import { calculateHealthScores, createWorkspaceCalculator, previousRange, rangeForPreset } from '@/lib/analytics/metrics';
 import type { AnalyticsDataset, AnalyticsPage, AnalyticsPlatform, AnalyzedPost, ComparisonMetrics, DateRange, MetricChange, MetricCoverage, PageAnalysis, RangePreset, WorkspaceAnalysis } from '@/lib/analytics/types';
 import './analytics.css';
 
@@ -30,18 +30,31 @@ const sections: { id: Section; label: string; icon: typeof Activity }[] = [
 ];
 const presets: { id: RangePreset; label: string }[] = [{ id: 'today', label: 'Today' }, { id: '7d', label: '7 days' }, { id: '30d', label: '30 days' }, { id: '90d', label: '90 days' }, { id: 'this-month', label: 'This month' }, { id: 'last-month', label: 'Last month' }];
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
-const count = (value: number | null | undefined, compact = false) => isNumber(value) ? new Intl.NumberFormat('en-IN', { notation: compact ? 'compact' : 'standard', maximumFractionDigits: compact ? 1 : 0 }).format(value) : '—';
-const decimal = (value: number | null | undefined, digits = 2) => isNumber(value) ? new Intl.NumberFormat('en-IN', { maximumFractionDigits: digits }).format(value) : '—';
-const money = (value: number | null | undefined) => isNumber(value) ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: value < 100 ? 2 : 0 }).format(value) : '—';
-const percent = (value: number | null | undefined) => isNumber(value) ? new Intl.NumberFormat('en-IN', { style: 'percent', maximumFractionDigits: 1 }).format(value) : '—';
+const numberFormat = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+const compactFormat = new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 });
+const decimalFormats = new Map<number, Intl.NumberFormat>();
+const moneyFormat = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+const smallMoneyFormat = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 });
+const percentFormat = new Intl.NumberFormat('en-IN', { style: 'percent', maximumFractionDigits: 1 });
+const dateFormat = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+const exactDateFormat = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+const shortDateFormat = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+const count = (value: number | null | undefined, compact = false) => isNumber(value) ? (compact ? compactFormat : numberFormat).format(value) : '-';
+const decimal = (value: number | null | undefined, digits = 2) => {
+  if (!isNumber(value)) return '-';
+  if (!decimalFormats.has(digits)) decimalFormats.set(digits, new Intl.NumberFormat('en-IN', { maximumFractionDigits: digits }));
+  return decimalFormats.get(digits)!.format(value);
+};
+const money = (value: number | null | undefined) => isNumber(value) ? (value < 100 ? smallMoneyFormat : moneyFormat).format(value) : '-';
+const percent = (value: number | null | undefined) => isNumber(value) ? percentFormat.format(value) : '-';
 function date(value: string | null | undefined, exact = false) {
   if (!value) return 'Not available';
   const at = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? value + 'T12:00:00Z' : value);
   if (!Number.isFinite(at.getTime())) return 'Not available';
-  return new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata', ...(exact ? { hour: '2-digit', minute: '2-digit' } as const : {}) }).format(at) + (exact ? ' IST' : '');
+  return (exact ? exactDateFormat : dateFormat).format(at) + (exact ? ' IST' : '');
 }
 const rangeLabel = (range: DateRange) => date(range.from) + ' – ' + date(range.to);
-const shortDate = (value: string) => new Date(value + 'T12:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+const shortDate = (value: string) => shortDateFormat.format(new Date(value + 'T12:00:00Z'));
 const initials = (value: string | null | undefined) => (value || 'P').replace(/^@/, '').slice(0, 2).toUpperCase();
 const safeUrl = (value: string | null | undefined) => value && /^https:\/\//i.test(value) ? value : null;
 function validRange(range: DateRange) {
@@ -155,19 +168,20 @@ export default function AnalyticsDashboard({ account, initialDataset, demo = fal
     const collectionPages = collectionId ? new Set(dataset.memberships?.filter(item => item.collectionId === collectionId).map(item => item.pageId)) : null;
     const text = search.trim().toLowerCase();
     const pages = dataset.pages.filter(page => (platform === 'all' || page.platform === platform) && (!collectionPages || collectionPages.has(page.id)) && (!text || [page.name, page.handle, page.editor].some(value => value?.toLowerCase().includes(text))));
-    const ids = new Set(pages.map(page => page.id));
-    return { ...dataset, pages, accountSnapshots: dataset.accountSnapshots.filter(item => ids.has(item.pageId)), postSnapshots: dataset.postSnapshots.filter(item => ids.has(item.pageId)), alerts: dataset.alerts.filter(item => ids.has(item.pageId)) };
+    return { ...dataset, pages };
   }, [dataset, platform, collectionId, search]);
+  const calculate = useMemo(() => dataset ? createWorkspaceCalculator(dataset) : null, [dataset]);
+  const hasPageFilter = !!dataset && !!filteredDataset && filteredDataset.pages.length !== dataset.pages.length;
   const stableHealth = useMemo(() => {
-    if (!dataset || !filteredDataset || filteredDataset.pages.length === dataset.pages.length) return null;
+    if (!dataset || !hasPageFilter) return null;
     try { return calculateHealthScores(dataset, range, dataset.generatedAt); }
     catch { return null; }
-  }, [dataset, filteredDataset?.pages.length, range]);
+  }, [dataset, hasPageFilter, range]);
   const calculation = useMemo(() => {
-    if (!filteredDataset) return { analysis: null, error: '' };
-    try { return { analysis: calculateWorkspace(filteredDataset, range, comparison, filteredDataset.generatedAt, stableHealth || undefined), error: '' }; }
+    if (!filteredDataset || !calculate) return { analysis: null, error: '' };
+    try { return { analysis: calculate(range, comparison, filteredDataset.generatedAt, stableHealth || undefined, new Set(filteredDataset.pages.map(page => page.id))), error: '' }; }
     catch (cause) { return { analysis: null, error: cause instanceof Error ? cause.message : 'These dates could not be analysed.' }; }
-  }, [filteredDataset, range, comparison, stableHealth]);
+  }, [filteredDataset, calculate, range, comparison, stableHealth]);
   const analysis = calculation.analysis, total = analysis?.totals, detail = analysis?.pages.find(item => item.page.id === selectedPage);
   const title = detail ? detail.page.name || detail.page.handle : sections.find(item => item.id === section)!.label;
   const viewLabel = mode === 'gained' ? 'Views gained' : 'Published-post views';

@@ -133,7 +133,8 @@ function fixedAge(post: AnalyticsPost, snapshots: PostSnapshot[], now: number): 
   if (!Number.isFinite(published) || now - published < 7 * DAY) return null;
   return snapshots.find(s => { const age = time(s.observedAt) - published; return age >= 7 * DAY && age <= 8 * DAY && counter(s.views); }) || null;
 }
-type SnapshotIndex = { posts: Map<string, Map<string, PostSnapshot[]>>; accounts: Map<string, AccountSnapshot[]> };
+type PreparedPage = { now: number; sourcePosts: AnalyticsPost[]; fixed: Map<string, PostSnapshot>; views: Map<string, Observation[]>; observations: Observation[] };
+type SnapshotIndex = { posts: Map<string, Map<string, PostSnapshot[]>>; accounts: Map<string, AccountSnapshot[]>; prepared: Map<AnalyticsPage, PreparedPage> };
 function indexSnapshots(dataset: AnalyticsDataset): SnapshotIndex {
   const posts = new Map<string, Map<string, PostSnapshot[]>>(), accounts = new Map<string, AccountSnapshot[]>();
   for (const snapshot of dataset.postSnapshots) {
@@ -146,7 +147,25 @@ function indexSnapshots(dataset: AnalyticsDataset): SnapshotIndex {
     if (!accounts.has(snapshot.pageId)) accounts.set(snapshot.pageId, []);
     accounts.get(snapshot.pageId)!.push(snapshot);
   }
-  return { posts, accounts };
+  return { posts, accounts, prepared: new Map() };
+}
+function preparePage(page: AnalyticsPage, index: SnapshotIndex, now: number): PreparedPage {
+  const cached = index.prepared.get(page);
+  if (cached?.now === now) return cached;
+  const seen = new Set<string>();
+  const sourcePosts = page.posts.filter(post => { if (seen.has(post.id)) return false; seen.add(post.id); return true; });
+  const snapshots = index.posts.get(page.id), fixed = new Map<string, PostSnapshot>(), views = new Map<string, Observation[]>();
+  for (const post of sourcePosts) {
+    const samples = snapshotsFor(post, snapshots?.get(post.id) || [], page, now), age = fixedAge(post, samples, now);
+    if (age) fixed.set(post.id, age);
+    views.set(post.id, samples.filter(s => counter(s.views)).map(s => ({ at: time(s.observedAt), value: s.views! })));
+  }
+  const observations = (index.accounts.get(page.id) || []).filter(s => counter(s.followers) && time(s.observedAt) <= now).map(s => ({ at: time(s.observedAt), value: s.followers! }));
+  if (counter(page.followers) && page.lastSyncedAt && time(page.lastSyncedAt) <= now && !observations.some(o => o.at === time(page.lastSyncedAt))) observations.push({ at: time(page.lastSyncedAt), value: page.followers });
+  observations.sort((a, b) => a.at - b.at);
+  const prepared = { now, sourcePosts, fixed, views, observations };
+  index.prepared.set(page, prepared);
+  return prepared;
 }
 function dayRows(range: DateRange, now: number): { date: string; from: number; to: number }[] {
   const start = dayTime(range.from), end = Math.min(dayTime(range.to) + DAY, now);
@@ -162,16 +181,11 @@ function dayRows(range: DateRange, now: number): { date: string; from: number; t
 function pageAnalysis(page: AnalyticsPage, dataset: AnalyticsDataset, range: DateRange, now: number, includeTimeline = true, index = indexSnapshots(dataset)): PageAnalysis {
   const start = dayTime(range.from), requestedEnd = dayTime(range.to) + DAY, end = Math.min(requestedEnd, now);
   const days = Math.max(0, (dayTime(range.to) - start) / DAY + 1);
-  const seen = new Set<string>();
-  const sourcePosts = page.posts.filter(post => { if (seen.has(post.id)) return false; seen.add(post.id); return true; });
-  const snapshots = index.posts.get(page.id);
-  const fixed = new Map<string, PostSnapshot>();
+  const { sourcePosts, fixed, views, observations } = preparePage(page, index, now);
   const deltas = new Map<string, Delta>();
   for (const post of sourcePosts) {
-    const samples = snapshotsFor(post, snapshots?.get(post.id) || [], page, now), age = fixedAge(post, samples, now);
-    if (age) fixed.set(post.id, age);
     const published = time(post.publishedAt);
-    if (!Number.isFinite(published) || published < requestedEnd && published <= now) deltas.set(post.id, measuredDelta(samples.filter(s => counter(s.views)).map(s => ({ at: time(s.observedAt), value: s.views! })), start, end, published));
+    if (!Number.isFinite(published) || published < requestedEnd && published <= now) deltas.set(post.id, measuredDelta(views.get(post.id)!, start, end, published));
   }
   const publishedPosts = sourcePosts.filter(post => { const value = time(post.publishedAt); return value >= start && value < requestedEnd && value <= now; });
   const comparable = publishedPosts.filter(post => fixed.has(post.id));
@@ -180,9 +194,6 @@ function pageAnalysis(page: AnalyticsPage, dataset: AnalyticsDataset, range: Dat
   const baseline30 = sourcePosts.filter(post => { const at = time(post.publishedAt); return at >= start - 30 * DAY && at < start && fixed.has(post.id); }).map(post => fixed.get(post.id)!.views!);
   const comparableViews = comparable.map(post => fixed.get(post.id)!.views!);
   const middle = median(comparableViews), base90 = median(baseline90), base30 = median(baseline30);
-  const observations = (index.accounts.get(page.id) || []).filter(s => counter(s.followers) && time(s.observedAt) <= now).map(s => ({ at: time(s.observedAt), value: s.followers! }));
-  if (counter(page.followers) && page.lastSyncedAt && time(page.lastSyncedAt) <= now && !observations.some(o => o.at === time(page.lastSyncedAt))) observations.push({ at: time(page.lastSyncedAt), value: page.followers });
-  observations.sort((a, b) => a.at - b.at);
   const growth = measuredDelta(observations, start, end);
   const firstFollowers = observations.find(o => o.at >= start && o.at <= end);
   const endFollowers = observations.filter(o => o.at <= end).at(-1);
@@ -321,14 +332,25 @@ export function calculateHealthScores(dataset: AnalyticsDataset, input: DateRang
 }
 
 export function calculateWorkspace(dataset: AnalyticsDataset, input: DateRange, comparisonRange?: DateRange | null, nowInput?: string | Date, peerScores?: Record<string, HealthScore>): WorkspaceAnalysis {
+  return calculateWithIndex(dataset, input, comparisonRange, nowInput, peerScores, indexSnapshots(dataset));
+}
+
+/** Reuse prepared history while filtering one immutable, fully loaded owner dataset.
+ * Create a new calculator whenever the dataset is replaced after a load or edit. */
+export function createWorkspaceCalculator(dataset: AnalyticsDataset) {
+  const index = indexSnapshots(dataset);
+  return (input: DateRange, comparisonRange?: DateRange | null, nowInput?: string | Date, peerScores?: Record<string, HealthScore>, pageIds?: ReadonlySet<string>): WorkspaceAnalysis =>
+    calculateWithIndex(pageIds ? { ...dataset, pages: dataset.pages.filter(page => pageIds.has(page.id)) } : dataset, input, comparisonRange, nowInput, peerScores, index);
+}
+
+function calculateWithIndex(dataset: AnalyticsDataset, input: DateRange, comparisonRange: DateRange | null | undefined, nowInput: string | Date | undefined, peerScores: Record<string, HealthScore> | undefined, index: SnapshotIndex): WorkspaceAnalysis {
   const range = normalizeRange(input), now = asNow(nowInput || dataset.generatedAt), compareRange = comparisonRange ? normalizeRange(comparisonRange) : null;
   const seen = new Set<string>();
   const source = dataset.pages.filter(page => { if (seen.has(page.id)) return false; seen.add(page.id); return true; });
-  const index = indexSnapshots(dataset);
   const pages = source.map(page => pageAnalysis(page, dataset, range, now, true, index));
   scorePages(pages);
   if (peerScores) for (const page of pages) if (Object.hasOwn(peerScores, page.page.id)) page.health = peerScores[page.page.id];
-  const alerts = dataset.alerts.filter(alert => !alert.resolvedAt && source.some(page => page.id === alert.pageId));
+  const alerts = dataset.alerts.filter(alert => !alert.resolvedAt && seen.has(alert.pageId));
   const totals = totalsFor(pages, alerts);
   const platforms: PlatformAnalysis[] = (['instagram', 'tiktok', 'youtube'] as const).filter(platform => pages.some(page => page.page.platform === platform)).map(platform => {
     const peers = pages.filter(page => page.page.platform === platform);
@@ -336,8 +358,9 @@ export function calculateWorkspace(dataset: AnalyticsDataset, input: DateRange, 
     const bestPost = peers.flatMap(page => page.posts).filter(post => post.fixedAgeViews !== null && time(post.publishedAt) >= dayTime(range.from) && time(post.publishedAt) < dayTime(range.to) + DAY).sort((a, b) => b.fixedAgeViews! - a.fixedAgeViews! || a.id.localeCompare(b.id))[0] || null;
     return { platform, totals: totalsFor(peers, alerts), rankings, bestPageId: rankings.find(page => page.health.score !== null || page.metrics.medianViews !== null)?.page.id || null, bestPost };
   });
-  const timeline = dayRows(range, now).map(day => {
-    const points = pages.map(page => page.timeline.find(point => point.date === day.date)).filter((point): point is DailyPoint => !!point);
+  const timeline = dayRows(range, now).map((day, dayIndex) => {
+    // Every page uses the same range and clock, so its timeline has identical day positions.
+    const points = pages.map(page => page.timeline[dayIndex]);
     return { date: day.date, viewsGained: sum(points.map(p => p.viewsGained)), publishedViews: sum(points.map(p => p.publishedViews)), followers: sum(points.map(p => p.followers)), followerGrowth: sum(points.map(p => p.followerGrowth)), postsPublished: points.reduce((n, p) => n + p.postsPublished, 0), coverage: points.some(p => p.viewsGained !== null) ? 'partial' as const : 'unavailable' as const };
   });
   const monthly: MonthlyRow[] = monthRanges(range).map(month => {
@@ -347,7 +370,8 @@ export function calculateWorkspace(dataset: AnalyticsDataset, input: DateRange, 
   let comparison: WorkspaceAnalysis['comparison'] = null;
   if (compareRange) {
     const previous = source.map(page => pageAnalysis(page, dataset, compareRange, now, false, index)), previousTotals = totalsFor(previous, alerts);
-    comparison = { range: compareRange, totals: previousTotals, metrics: changes(totals, previousTotals), pages: pages.map(page => ({ pageId: page.page.id, metrics: changes(page.metrics, previous.find(item => item.page.id === page.page.id)!.metrics) })), verdict: verdict(totals, previousTotals) };
+    const previousById = new Map(previous.map(page => [page.page.id, page]));
+    comparison = { range: compareRange, totals: previousTotals, metrics: changes(totals, previousTotals), pages: pages.map(page => ({ pageId: page.page.id, metrics: changes(page.metrics, previousById.get(page.page.id)!.metrics) })), verdict: verdict(totals, previousTotals) };
   }
   const warnings = ['Growth uses recorded snapshot changes only; tracking cannot recover earlier follower counts.', 'Typical views, engagement, hit rate and health use snapshots captured at 7–8 days of post age.', 'Daily growth points show changes between observations ending on that date, not continuously measured daily views.', 'Costs use the current monthly rate, prorated by calendar days; past rate changes are not reconstructed.'];
   if (totals.mixedPlatforms) warnings.push('Rankings, typical views and engagement are separated by platform. Combined view totals are counts, not cross-platform rankings.');
