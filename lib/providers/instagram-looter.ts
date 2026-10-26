@@ -51,7 +51,7 @@ export const instagramLooter: SocialDataProvider = {
       postCount: exact(user.edge_owner_to_timeline_media?.count, user.media_count),
       isVerified: boolean(user.is_verified),
     };
-    return collectPosts({ page, provider: 'instagram-looter', profile, scope,
+    const result = await collectPosts({ page, provider: 'instagram-looter', profile, scope,
       load: async cursor => {
         // The same live continuation failed at 50 and succeeded at the documented
         // default 12. Keep each request at that verified size, even for large imports.
@@ -90,5 +90,14 @@ export const instagramLooter: SocialDataProvider = {
         };
       },
     });
+    // Profile V1 can report zero while the V2 feed returns real posts. That
+    // contradiction makes the lifetime total unavailable; a selected feed is
+    // not evidence of the account's total number of posts.
+    if (profile.postCount === 0 && (result.coverage.scanned ?? result.posts.length) > 0) {
+      result.profile.postCount = null;
+      result.overall.posts = null;
+      result.coverage.note += ' The provider did not return a reliable profile post total.';
+    }
+    return result;
   },
 };

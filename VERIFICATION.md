@@ -17,6 +17,8 @@ The public GraphQL fixture contains selected response fields only, without crede
 
 Local validation for this correction: **50 tests passed, zero failures**, using `node --test tests/instagram-looter.test.mjs tests/provider-adapters.test.mjs tests/refresh-service.test.mjs`. TypeScript, the public-env guard and the production webpack build also passed. This targeted run covers the changed adapter/error boundary and shared manual/cron service; the unrelated full suite was not rerun.
 
+After commit `2d8c216` deployed successfully on Vercel, a real refresh through the normal user's Collections screen saved The Unscripted Bharat with 5,046 followers and 24 selected posts (2,079,609 views). Pagination stopped early and remained visibly labelled **Partial selection**; the successful initial pages do not establish complete publication-range coverage. The provider also returned a contradictory profile post total of zero. A follow-up makes that total unavailable when fetched posts prove it is unreliable, while retaining a true zero for an exhausted empty feed. Its provider/adapter regression run passed **37 tests** and TypeScript passed.
+
 ## Instagram Looter and performance update — 2026-10-26
 
 `node --test tests/*.test.mjs` passed **232 tests, zero failures, zero skipped**. The full run includes the existing authentication, tenant isolation, backup/import, admin and provider regressions alongside:

@@ -206,3 +206,24 @@ test('verified flat User Info V1 profile resolves its exact account ID before th
   assert.equal(result.canonicalId, '15629622050'); assert.equal(result.profile.followers, 5045);
   assert.equal(result.profile.following, 0); assert.equal(result.profile.name, 'The Unscripted Bharat');
 });
+
+test('a zero profile total contradicted by fetched posts becomes unavailable without estimating a lifetime total', async () => {
+  const zeroProfile = { ...profile, edge_owner_to_timeline_media: { count: 0 } };
+  for (const requestedScope of [scope,
+    { mode: 'date', postLimit: 1000, from: '2026-10-01T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' }]) {
+    const result = await instagramLooter.fetchPage(page, { ...options(async (_, raw) =>
+      raw.includes('/profile') ? zeroProfile : feed([media('4007110762244757234')])), scope: requestedScope });
+    assert.equal(result.coverage.scanned, 1);
+    assert.equal(result.posts.length, requestedScope.mode === 'date' ? 0 : 1);
+    assert.equal(result.profile.postCount, null); assert.equal(result.overall.posts, null);
+    assert.match(result.coverage.note, /did not return a reliable profile post total/);
+  }
+});
+
+test('a zero profile total remains zero when the exhausted feed is empty', async () => {
+  const result = await instagramLooter.fetchPage(page, options(async (_, raw) => raw.includes('/profile')
+    ? { ...profile, edge_owner_to_timeline_media: { count: 0 } } : feed([])));
+  assert.equal(result.posts.length, 0); assert.equal(result.coverage.scanned, 0);
+  assert.equal(result.profile.postCount, 0); assert.equal(result.overall.posts, 0);
+  assert.doesNotMatch(result.coverage.note, /did not return a reliable profile post total/);
+});
