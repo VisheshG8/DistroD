@@ -41,12 +41,15 @@ export function envelopes(body: unknown): Json[] {
 }
 export function checkPayload(body: unknown): void {
   for (const item of envelopes(body)) {
-    const message = text(item.message, item.detail, item.error?.message, item.error);
+    const message = text(item.message, item.detail, item.errorMessage, item.error?.message, item.error);
     if (item.is_private === true || /private account|account is private|profile is private/i.test(message)) {
       throw new ProviderError('This account is private. Only public accounts can be refreshed.', 'PRIVATE', 422);
     }
+    if (item.status === false && /^This account does not exist\.$/i.test(message)) {
+      throw new ProviderError('This account does not exist. Check the profile handle.', 'NOT_FOUND', 404);
+    }
     const badCode = item.code !== undefined && /^-?\d+$/.test(String(item.code)) && ![0, 200, '0', '200'].includes(item.code);
-    if (item.success === false || item.status === 'fail' || item.error || badCode || (item.status_code !== undefined && ![0, 200, '0', '200'].includes(item.status_code))) {
+    if (item.success === false || item.status === false || item.status === 'fail' || item.error || badCode || (item.status_code !== undefined && ![0, 200, '0', '200'].includes(item.status_code))) {
       throw new ProviderError('The data provider could not return this account.');
     }
   }
