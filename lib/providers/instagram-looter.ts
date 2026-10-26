@@ -15,10 +15,11 @@ function exact(...values: unknown[]): number | null {
 }
 
 /** RapidAPI playground contract, checked 2026-10-26:
- * /web-profile?username=... and /user-feeds?id=...&count=...&max_id=...
+ * /profile?username=... and /user-feeds2?id=...&count=...&end_cursor=...
  * https://rapidapi.com/irrors-apis/api/instagram-looter2/playground
- * Native Instagram web/mobile envelopes are validated below. The public
- * playground supplies no response examples; fixture tests are not live verification.
+ * Profile V1 and the V2 GraphQL feed were verified with live requests in the
+ * RapidAPI playground. /web-profile reported existing accounts as missing;
+ * /user-feeds failed server-side. V2 uses a different cursor and envelope.
  */
 export const instagramLooter: SocialDataProvider = {
   id: 'instagram-looter', platforms: ['instagram'],
@@ -34,7 +35,7 @@ export const instagramLooter: SocialDataProvider = {
       return body;
     };
     const handle = page.handle.replace(/^@/, '');
-    const body = await call('/web-profile', { username: handle });
+    const body = await call('/profile', { username: handle });
     const candidates = envelopes(body).flatMap(item => [object(item.user), object(item.graphql?.user), item]);
     const user = candidates.find(item => text(item.username) && text(item.pk, item.id));
     if (!user) throw new ProviderError('Instagram Looter returned an unrecognized profile response.');
@@ -50,17 +51,19 @@ export const instagramLooter: SocialDataProvider = {
       postCount: exact(user.edge_owner_to_timeline_media?.count, user.media_count),
       isVerified: boolean(user.is_verified),
     };
-    return collectPosts({ page, provider: 'instagram-looter', profile, scope,
+    const result = await collectPosts({ page, provider: 'instagram-looter', profile, scope,
       load: async cursor => {
-        const feed = await call('/user-feeds', { id, count: String(Math.min(50, Math.max(12, scope.postLimit))),
-          allow_restricted_media: 'false', ...(cursor ? { max_id: cursor } : {}) });
-        const payload = envelopes(feed).find(item => Array.isArray(item.items));
+        // The same live continuation failed at 50 and succeeded at the documented
+        // default 12. Keep each request at that verified size, even for large imports.
+        const feed = await call('/user-feeds2', { id, count: '12',
+          ...(cursor ? { end_cursor: cursor } : {}) });
+        const payload = envelopes(feed).map(item => object(item.user?.edge_owner_to_timeline_media)).find(item => Array.isArray(item.edges));
         if (!payload) throw new ProviderError('Instagram Looter returned an unrecognized post response.');
-        const next = text(payload.next_max_id) || null;
-        const more = boolean(payload.more_available);
+        const next = text(payload.page_info?.end_cursor) || null;
+        const more = boolean(payload.page_info?.has_next_page);
         // Do not label a truncated or changed vendor response as an exhausted feed.
         if (more === null && !next) throw new ProviderError('Instagram Looter did not return reliable pagination information.');
-        return { items: payload.items, cursor: next, hasMore: more ?? !!next };
+        return { items: payload.edges, cursor: next, hasMore: more ?? !!next };
       },
       normalize: input => {
         const raw = object(input.node || input.media || input);
@@ -87,5 +90,14 @@ export const instagramLooter: SocialDataProvider = {
         };
       },
     });
+    // Profile V1 can report zero while the V2 feed returns real posts. That
+    // contradiction makes the lifetime total unavailable; a selected feed is
+    // not evidence of the account's total number of posts.
+    if (profile.postCount === 0 && (result.coverage.scanned ?? result.posts.length) > 0) {
+      result.profile.postCount = null;
+      result.overall.posts = null;
+      result.coverage.note += ' The provider did not return a reliable profile post total.';
+    }
+    return result;
   },
 };

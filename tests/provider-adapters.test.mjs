@@ -240,6 +240,43 @@ test('HTTP 200 vendor error envelopes are logged as failed requests', async () =
   assert.ok(!JSON.stringify(db.updates[0].values.raw_response).includes('api_key=secret'));
 });
 
+test('RapidAPI HTTP 200 status:false envelopes fail inside the request boundary and are safely logged', async () => {
+  for (const wrap of [body => body, body => ({ data: body }), body => ({ response: body })]) {
+    const db = fakeDb(); let calls = 0;
+    const request = createProviderRequest({ db, platform: 'instagram', minIntervalMs: 0, fetcher: async () => {
+      calls++;
+      return jsonResponse(wrap({ status: false, message: 'Upstream rejected api_key=rapid-fixture-secret',
+        details: { 'x-rapidapi-key': 'rapid-fixture-secret' } }));
+    } });
+    await assert.rejects(request('instagram-looter', 'https://instagram-looter2.p.rapidapi.com/web-profile?username=sample',
+      { 'x-rapidapi-key': 'rapid-fixture-secret', 'x-rapidapi-host': 'instagram-looter2.p.rapidapi.com' }), error =>
+      error.code === 'PROVIDER' && error.message === 'The data provider could not return this account.');
+    assert.equal(calls, 1, 'an explicit vendor rejection must not be silently retried');
+    assert.equal(db.rpcCalls.length, 1); assert.equal(db.updates.length, 1);
+    assert.equal(db.updates[0].values.success, false);
+    assert.equal(db.updates[0].values.error, 'The data provider could not return this account.');
+    assert.equal(JSON.stringify(db.updates).includes('rapid-fixture-secret'), false);
+  }
+});
+
+test('Looter errorMessage failures classify missing and private accounts without echoing vendor details', async () => {
+  for (const [body, code, status, message] of [
+    [{ status: false, errorMessage: 'This account does not exist.' }, 'NOT_FOUND', 404, 'This account does not exist. Check the profile handle.'],
+    [{ status: false, errorMessage: 'This account is private.' }, 'PRIVATE', 422, 'This account is private. Only public accounts can be refreshed.'],
+    [{ status: false, is_private: true }, 'PRIVATE', 422, 'This account is private. Only public accounts can be refreshed.'],
+    [{ status: false, errorMessage: 'Unrecognized vendor failure api_key=rapid-error-secret' }, 'PROVIDER', 502, 'The data provider could not return this account.'],
+  ]) {
+    const db = fakeDb();
+    const request = createProviderRequest({ db, platform: 'instagram', minIntervalMs: 0,
+      fetcher: async () => jsonResponse({ data: body }) });
+    await assert.rejects(request('instagram-looter', 'https://instagram-looter2.p.rapidapi.com/web-profile?username=sample',
+      { 'x-rapidapi-key': 'rapid-error-secret' }), error => error.code === code && error.status === status && error.message === message);
+    assert.equal(db.updates.length, 1); assert.equal(db.updates[0].values.success, false);
+    assert.equal(db.updates[0].values.error, message);
+    assert.equal(JSON.stringify(db.updates).includes('rapid-error-secret'), false);
+  }
+});
+
 test('legacy requests reserve owner quota and log workspace funding without consuming global budget', async () => {
   const db = fakeDb(); let reserved = 0;
   const request = createProviderRequest({ db, platform: 'tiktok', owner: 'owner-1', reserveGlobal: false,

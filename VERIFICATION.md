@@ -1,5 +1,24 @@
 # Verification
 
+## Instagram Looter live endpoint correction — 2026-10-26
+
+Hosted request logs showed HTTP 500 from `/user-feeds`, plus HTTP 200 `/web-profile` responses containing `{status:false,errorMessage:"This account does not exist."}`. Those HTTP 200 failures had been incorrectly recorded as successful requests.
+
+The signed-in RapidAPI playground was used to verify the replacement contract, without changing credentials or purchasing a plan:
+
+- `/profile?username=theunscripted.bharat` returned HTTP 200, `status:true`, the matching username, stable ID `15629622050`, and public profile counters. The adapter now uses User Info V1 rather than `/web-profile`.
+- `/user-feeds2?id=38276910342&count=12` returned HTTP 200 with twelve media nodes under `data.user.edge_owner_to_timeline_media.edges`. Its feed `page_info` supplies `has_next_page` and `end_cursor`; per-post comments have a separate `page_info` and must not drive feed pagination.
+- A continuation using the exact returned cursor failed with `count=50` (HTTP 500/Internal Error) and succeeded with `count=12`, returning different posts and a new cursor. The adapter now requests 12 per page and uses `end_cursor` rather than the V1 `max_id` parameter.
+- A returned GraphVideo retained 4,121 views, three likes and zero comments despite `like_and_view_counts_disabled:true`. Tests cover this exact minimal observed shape rather than assuming the presentation flag hides all counters.
+- `status:false` is rejected inside the request boundary before success logging. The confirmed account-not-found and private-account messages produce safe fixed errors; arbitrary upstream text and credentials remain excluded.
+- `podbh_arat` remained unavailable in both alternate Looter lookups. Opening that exact profile in the signed-in Instagram browser also displayed “Sorry, this page isn't available.” Its saved handle needs correction or confirmation independently of the adapter fix; it was not silently remapped or deleted.
+
+The public GraphQL fixture contains selected response fields only, without credentials, biography/contact details, signed media URLs or video manifests. This is an application fix; **no additional database migration or new environment variable is needed**. Existing historical failed/success log rows are retained unchanged. The older fixture-only validation notes below describe the preceding implementation.
+
+Local validation for this correction: **50 tests passed, zero failures**, using `node --test tests/instagram-looter.test.mjs tests/provider-adapters.test.mjs tests/refresh-service.test.mjs`. TypeScript, the public-env guard and the production webpack build also passed. This targeted run covers the changed adapter/error boundary and shared manual/cron service; the unrelated full suite was not rerun.
+
+After commit `2d8c216` deployed successfully on Vercel, a real refresh through the normal user's Collections screen saved The Unscripted Bharat with 5,046 followers and 24 selected posts (2,079,609 views). Pagination stopped early and remained visibly labelled **Partial selection**; the successful initial pages do not establish complete publication-range coverage. The provider also returned a contradictory profile post total of zero. A follow-up makes that total unavailable when fetched posts prove it is unreliable, while retaining a true zero for an exhausted empty feed. Its provider/adapter regression run passed **37 tests** and TypeScript passed.
+
 ## Instagram Looter and performance update — 2026-10-26
 
 `node --test tests/*.test.mjs` passed **232 tests, zero failures, zero skipped**. The full run includes the existing authentication, tenant isolation, backup/import, admin and provider regressions alongside:
