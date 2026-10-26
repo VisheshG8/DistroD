@@ -98,7 +98,7 @@ Assuming two requests per unique paid-provider account per day for 30 days:
 
 Initial imports, pagination, retries, and fallback calls add requests. Two requests daily is a planning assumption. The $25 budget cannot sustain these workloads at the entry rate: scheduling slows near the caps and stops spending at the cap. Confirm your tier before enabling it. Vendor references checked for this release: [HikerAPI tier rates](https://hikerapi.com/help/affiliate) and [LamaTok pricing](https://lamatok.com/tiktok-api).
 
-**Scheduled refresh is paused by default in the database.** `vercel.json` invokes `/api/cron/refresh` hourly at minute 17; each account is checked against its configured interval, initially 24 hours. Hourly cron needs a supporting Vercel plan. [Hobby permits only daily cron](https://vercel.com/docs/cron-jobs/usage-and-pricing), so change/remove the cron entry or use an authenticated external scheduler before deploying there. See [DEPLOYMENT.md](./DEPLOYMENT.md) for enablement and bounded-work limits.
+**Scheduled refresh is paused by default in the database.** `vercel.json` invokes `/api/cron/refresh` once daily with `17 0 * * *` (00:17 UTC), which supports Vercel Hobby. The exact execution time is not guaranteed on Hobby. Each run attempts at most 50 shared accounts within roughly 220 seconds, so the daily schedule does not guarantee that every account refreshes each day. Manual refresh remains available. For a larger queue, use an authenticated external scheduler or change to hourly cron on a supporting Vercel plan. See [DEPLOYMENT.md](./DEPLOYMENT.md) for setup and [Vercel cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing).
 
 ## Move a workspace to another account
 

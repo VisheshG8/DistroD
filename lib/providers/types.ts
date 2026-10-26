@@ -1,6 +1,6 @@
 import type { PageFetchResult, PageInput, Platform, Post } from '../providers';
 
-export type ProviderId = 'youtube-official' | 'hikerapi' | 'lamatok' | 'tikhub' | 'scrapecreators';
+export type ProviderId = 'youtube-official' | 'hikerapi' | 'lamatok' | 'tikhub' | 'scrapecreators' | 'instagram-looter';
 export type Scope = { mode: 'posts' | 'date'; postLimit: number; from: string | null; to: string | null };
 export type StandardProfile = {
   id: string | null; handle: string; name: string; avatar: string | null;
