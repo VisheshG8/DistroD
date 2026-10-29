@@ -86,7 +86,7 @@ export default function DistributionDashboard({account}:{account:WorkspaceAccoun
   async function load() {
     const res = await fetch("/api/desk", { cache: "no-store" });
     if (res.status === 401) { setAuth(true); throw new Error("Sign in to open your private workspace."); }
-    const result = await res.json() as Desk & { error?: string }; if (!res.ok) throw new Error(result.error || "Could not load your workspace. Please try again."); setData(result); return result;
+    const result = await res.json().catch(() => ({})) as Desk & { error?: string }; if (!res.ok) throw new Error(result.error || "Could not load your workspace. Please try again."); setData(result); return result;
   }
   useEffect(() => { load().catch(e => setError(e.message)).finally(() => setLoading(false)); }, []);
   useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(""), 6500); return () => clearTimeout(t); }, [notice]);
@@ -143,7 +143,7 @@ export default function DistributionDashboard({account}:{account:WorkspaceAccoun
     setNavOpen(false); setFormError(""); setMenu(false); if (value === "create") setName(""); if (value === "rename") setName(collection?.name || ""); if (value === "duplicate") setName(`${collection?.name || "Collection"} · copy`); if (value === "add") setInputs("");
     if (value === "settings") { setProvider(data.settings.provider); setApiKey(""); setYoutubeKey(""); setClearApiKey(false); setClearYoutubeKey(false); setLimit(data.settings.postLimit); setRequestLimit(data.settings.requestLimit); } setModal(value);
   }
-  async function mutate(body: Record<string, unknown>) { const res = await fetch("/api/desk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const r = await res.json() as { error?: string; id?: string; added?: number; errors?: string[] }; if (!res.ok) throw new Error(r.error || "That change could not be saved."); return r; }
+  async function mutate(body: Record<string, unknown>) { const res = await fetch("/api/desk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const r = await res.json().catch(() => ({})) as { error?: string; id?: string; added?: number; errors?: string[] }; if (!res.ok) throw new Error(r.error || "That change could not be saved."); return r; }
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setFormError("");
     try {
@@ -168,7 +168,7 @@ export default function DistributionDashboard({account}:{account:WorkspaceAccoun
     if (!targets.length || progress) return; stop.current = false; setError(""); let success = 0; const failures: string[] = [];
     for (let i = 0; i < targets.length; i++) {
       if (stop.current) break; setProgress({ current: i + 1, total: targets.length, handle: targets[i].handle });
-      try { const res = await fetch("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pageId: targets[i].id, scope: activeScope }) }); const r = await res.json() as { error?: string; page?: Page }; if (!res.ok) throw new Error(r.error || "Refresh failed"); success++; if (r.page) { const updated = r.page; setData(d => ({ ...d, pages: d.pages.map(p => p.id === updated.id ? updated : p) })); } }
+      try { const res = await fetch("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pageId: targets[i].id, scope: activeScope }) }); const r = await res.json().catch(() => ({})) as { error?: string; page?: Page }; if (!res.ok) throw new Error(r.error || "Refresh failed"); success++; if (r.page) { const updated = r.page; setData(d => ({ ...d, pages: d.pages.map(p => p.id === updated.id ? updated : p) })); } }
       catch (e) { failures.push(`${targets[i].handle}: ${e instanceof Error ? e.message : "Refresh failed"}`); }
     }
     try { await load(); } catch (e) { failures.push(e instanceof Error ? e.message : "Could not reload workspace"); }

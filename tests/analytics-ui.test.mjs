@@ -14,6 +14,8 @@ const compile = path => ts.transpileModule(readFileSync(new URL(path, import.met
 }).outputText;
 const demoExports = {};
 new Script(compile('../lib/analytics/demo.ts')).runInNewContext({ exports: demoExports, require: name => name === './metrics' ? metrics : require(name) });
+const historyWindow = {};
+new Script(compile('../lib/analytics/history-window.ts')).runInNewContext({ exports: historyWindow, require: name => name === '../scope' ? require('../lib/scope.ts') : require(name) });
 const dataset = demoExports.createDemoDataset(new Date('2026-10-25T12:00:00Z'));
 const componentCode = compile('../components/analytics-dashboard.tsx');
 
@@ -29,6 +31,7 @@ function harness() {
     useRef(initial) { const index = cursor++; if (!(index in slots)) slots[index] = { current: initial }; return slots[index]; },
     useMemo(factory) { return factory(); },
     useEffect() {},
+    useDeferredValue(value) { return value; },
   };
   const exports = {};
   new Script(componentCode, { filename: 'analytics-dashboard.js' }).runInNewContext({ exports, console, Blob, URLSearchParams, AbortController,
@@ -38,6 +41,7 @@ function harness() {
       if (name === 'react') return hooks;
       if (name === './analytics.css') return {};
       if (name === '@/lib/analytics/metrics') return metrics;
+      if (name === '@/lib/analytics/history-window') return historyWindow;
       if (name === '@/lib/analytics/client') return { loadAnalyticsDataset() { throw new Error('The demo must never load live data.'); } };
       if (name === '@/lib/product') return { PRODUCT_NAME: 'Distribution Desk' };
       if (name === '@/lib/pages') return { parsePage() { throw new Error('No add-page dialog is opened in these tests.'); } };
