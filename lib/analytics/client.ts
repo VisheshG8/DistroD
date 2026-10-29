@@ -20,8 +20,9 @@ export async function loadAnalyticsDataset(params: URLSearchParams, signal?: Abo
     query.delete('cursor');
     if (cursor) query.set('cursor', cursor);
     const response = await fetch('/api/analytics?' + query, {signal: controller.signal, cache:'no-store'});
-    const chunk = await response.json() as Chunk;
-    if (!response.ok) throw new Error(chunk.error || 'Your saved history could not be loaded.');
+    // Hosting timeouts and gateway errors return HTML, not JSON; report them plainly.
+    const chunk = await response.json().catch(() => null) as Chunk | null;
+    if (!response.ok || !chunk) throw new Error(chunk?.error || (response.status === 504 || response.status === 408 ? 'Loading your history took too long. Try a shorter date range or retry.' : 'Your saved history could not be loaded. Please retry.'));
     if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
     if (!chunk.generatedAt || dataset.generatedAt && chunk.generatedAt !== dataset.generatedAt) throw new Error('Your saved history changed while loading. Reload the dashboard.');
     if (chunk.pages) dataset.pages.push(...chunk.pages);

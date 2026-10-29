@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, CalendarDays, ChartNoAxesCombined, Check, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, FileText, FolderOpen, IndianRupee, LayoutDashboard, Layers3, Loader2, LogOut, Pause, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users, Video, X } from 'lucide-react';
 import SignOutButton from '@/components/auth/sign-out-button';
 import { WorkspaceDialog } from '@/components/workspace-dialog';
@@ -8,6 +8,7 @@ import { downloadFile } from '@/lib/workspace-transfer';
 import { parsePage } from '@/lib/pages';
 import { PRODUCT_NAME } from '@/lib/product';
 import { loadAnalyticsDataset } from '@/lib/analytics/client';
+import { HISTORY_REUSE_MS, historyStart, narrowHistory } from '@/lib/analytics/history-window';
 import { calculateHealthScores, createWorkspaceCalculator, previousRange, rangeForPreset } from '@/lib/analytics/metrics';
 import type { AnalyticsDataset, AnalyticsPage, AnalyticsPlatform, AnalyzedPost, ComparisonMetrics, DateRange, MetricChange, MetricCoverage, PageAnalysis, RangePreset, WorkspaceAnalysis } from '@/lib/analytics/types';
 import './analytics.css';
@@ -19,6 +20,7 @@ type PostSort = 'newest' | 'views' | 'shares' | 'engagement' | 'best' | 'worst';
 type Modal = { type: 'add' } | { type: 'edit' | 'remove'; page: AnalyticsPage } | null;
 type PageForm = { input: string; platform: AnalyticsPlatform; monthlyPay: string; editor: string; startDate: string; active: boolean; notes: string };
 type ExtendedDataset = AnalyticsDataset & { collections?: { id: string; name: string }[]; memberships?: { collectionId: string; pageId: string }[] };
+type LoadedHistory = { key: string; revision: number; start: number; stale: boolean; dataset: ExtendedDataset };
 const emptyForm: PageForm = { input: '', platform: 'instagram', monthlyPay: '', editor: '', startDate: '', active: true, notes: '' };
 const platforms: AnalyticsPlatform[] = ['instagram', 'youtube', 'tiktok'];
 const platformNames = { instagram: 'Instagram', youtube: 'YouTube', tiktok: 'TikTok' };
@@ -143,33 +145,50 @@ export default function AnalyticsDashboard({ account, initialDataset, demo = fal
   const [rangeError, setRangeError] = useState(''), [platform, setPlatform] = useState<AnalyticsPlatform | 'all'>('all'), [collectionId, setCollectionId] = useState('');
   const [search, setSearch] = useState(''), [revision, setRevision] = useState(0), [pageIndex, setPageIndex] = useState(0), [postIndex, setPostIndex] = useState(0);
   const [mode, setMode] = useState<ViewMode>('gained'), [postSort, setPostSort] = useState<PostSort>('newest');
-  const [report, setReport] = useState<{ key: string; dataset: ExtendedDataset } | null>(null), [loadError, setLoadError] = useState<{ key: string; message: string } | null>(null);
+  const [report, setReport] = useState<LoadedHistory | null>(null), [loadError, setLoadError] = useState<{ key: string; message: string } | null>(null);
   const [modal, setModal] = useState<Modal>(null), [form, setForm] = useState<PageForm>(emptyForm), [saving, setSaving] = useState(false), [modalError, setModalError] = useState('');
   const [notice, setNotice] = useState(''), [actionError, setActionError] = useState(''), [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number } | null>(null);
   const stopRefresh = useRef(false), mounted = useRef(true);
   const requestKey = JSON.stringify([range.from, range.to, comparison?.from, comparison?.to, revision]);
-  const dataset: ExtendedDataset | null = demo && initialDataset ? initialDataset : report?.key === requestKey ? report.dataset : null;
+  const neededStart = useMemo(() => historyStart(range, comparison), [range, comparison]);
+  // A loaded history already contains every observation a narrower range needs, so reuse it instead of refetching.
+  // After an edit or refresh, keep the previous numbers on screen while the new history loads.
+  const covers = !!report && report.start <= neededStart;
+  const current = !!report && (report.key === requestKey || (covers && report.revision === revision && !report.stale));
+  const shown = demo && initialDataset ? null : current || covers ? report : null;
+  const shownDataset = shown?.dataset, shownStart = shown?.start;
+  const loadedDataset = useMemo(() => shownDataset && shownStart !== undefined ? narrowHistory(shownDataset, shownStart, neededStart) : null, [shownDataset, shownStart, neededStart]);
+  const dataset: ExtendedDataset | null = demo && initialDataset ? initialDataset : loadedDataset;
+  const needsLoad = !(demo && initialDataset) && !current;
   const error = loadError?.key === requestKey ? loadError.message : '';
   const loading = !dataset && !error;
+  const updating = needsLoad && !!dataset && !error;
   const busy = saving || !!refreshProgress;
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; stopRefresh.current = true; }; }, []);
   useEffect(() => {
-    if (demo && initialDataset) return;
+    if (!needsLoad) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ from: range.from, to: range.to });
     if (comparison) { params.set('compareFrom', comparison.from); params.set('compareTo', comparison.to); }
-    loadAnalyticsDataset(params, controller.signal).then(value => { if (!controller.signal.aborted) setReport({ key: requestKey, dataset: value }); }).catch(cause => { if (!controller.signal.aborted) setLoadError({ key: requestKey, message: cause instanceof Error ? cause.message : 'Could not load your workspace. Please retry.' }); });
+    loadAnalyticsDataset(params, controller.signal).then(value => { if (!controller.signal.aborted) setReport({ key: requestKey, revision, start: neededStart, stale: false, dataset: value }); }).catch(cause => { if (!controller.signal.aborted) setLoadError({ key: requestKey, message: cause instanceof Error ? cause.message : 'Could not load your workspace. Please retry.' }); });
     return () => controller.abort();
-  }, [requestKey, range.from, range.to, comparison, demo, initialDataset]);
+  }, [needsLoad, requestKey, revision, neededStart, range.from, range.to, comparison]);
+  useEffect(() => {
+    if (!report || report.stale) return;
+    const timer = setTimeout(() => setReport(value => value === report ? { ...value, stale: true } : value), HISTORY_REUSE_MS);
+    return () => clearTimeout(timer);
+  }, [report]);
   useEffect(() => { setPageIndex(0); setPostIndex(0); }, [section, platform, search, collectionId, range.from, range.to, postSort]);
+  // Typing stays responsive; the workspace is recalculated once the input settles.
+  const searchQuery = useDeferredValue(search);
   const filteredDataset = useMemo(() => {
     if (!dataset) return null;
     const collectionPages = collectionId ? new Set(dataset.memberships?.filter(item => item.collectionId === collectionId).map(item => item.pageId)) : null;
-    const text = search.trim().toLowerCase();
+    const text = searchQuery.trim().toLowerCase();
     const pages = dataset.pages.filter(page => (platform === 'all' || page.platform === platform) && (!collectionPages || collectionPages.has(page.id)) && (!text || [page.name, page.handle, page.editor].some(value => value?.toLowerCase().includes(text))));
     return { ...dataset, pages };
-  }, [dataset, platform, collectionId, search]);
+  }, [dataset, platform, collectionId, searchQuery]);
   const calculate = useMemo(() => dataset ? createWorkspaceCalculator(dataset) : null, [dataset]);
   const hasPageFilter = !!dataset && !!filteredDataset && filteredDataset.pages.length !== dataset.pages.length;
   const stableHealth = useMemo(() => {
@@ -221,7 +240,7 @@ export default function AnalyticsDashboard({ account, initialDataset, demo = fal
   }
   async function mutate(data: Record<string, unknown>) {
     const response = await fetch('/api/analytics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-    const result = await response.json(); if (!response.ok) throw new Error(result.error || 'The change could not be saved. Please retry.'); return result as { ok: boolean; pageId?: string; warning?: string };
+    const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'The change could not be saved. Please retry.'); return result as { ok: boolean; pageId?: string; warning?: string };
   }
   async function submitPage(event: FormEvent) {
     event.preventDefault(); if (demo || !modal || saving) return;
@@ -245,7 +264,7 @@ export default function AnalyticsDashboard({ account, initialDataset, demo = fal
       setRefreshProgress({ current: done + 1, total: pages.length });
       try {
         const response = await fetch('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: page.id, scope: { mode: 'posts', postLimit: 100, from: null, to: null } }) });
-        const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Refresh failed.');
+        const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Refresh failed.');
       } catch (cause) { failures.push(`${page.name || page.handle}: ${cause instanceof Error ? cause.message : 'Refresh failed.'}`); }
       done++;
     }
@@ -373,9 +392,9 @@ export default function AnalyticsDashboard({ account, initialDataset, demo = fal
     <aside className="an-sidebar"><a className="an-brand" href={demo ? '/demo' : '/dashboard'}><span><Layers3 size={23} /></span><strong>{PRODUCT_NAME}<i>.</i></strong></a><div className="an-workspace"><span>{initials(account.name || account.email)}</span><div><strong>{demo ? 'Sample workspace' : account.name || 'My workspace'}</strong><small>{demo ? 'Explore with sample data' : account.email}</small></div></div><nav aria-label="Workspace sections">{sections.map((item, index) => <button key={item.id} className={section === item.id && !selectedPage ? 'active' : ''} aria-current={section === item.id && !selectedPage ? 'page' : undefined} onClick={() => chooseSection(item.id)}><small>{String(index + 1).padStart(2, '0')}</small><item.icon size={18} /><span>{item.label}</span></button>)}</nav><div className="an-sidebar-bottom"><a href={demo ? '/login' : '/collections'}><FolderOpen size={17} />{demo ? 'Open your workspace' : 'Collections & backups'}</a>{!demo && account.userType === 'admin' && <a href="/admin"><ShieldCheck size={17} />Admin directory</a>}{!demo && <SignOutButton className="an-signout"><LogOut size={17} />Sign out</SignOutButton>}<p>Public page data.<br />Your own workspace.</p></div></aside>
     <main className="an-main"><header className="an-topbar"><div><span>Workspace</span><ChevronRight size={14} /><strong>{title}</strong></div><a href={demo ? '/login' : '/collections'}><ArrowDownToLine size={15} />{demo ? 'Sign in' : 'Import / export'}</a></header>
       <div className="an-content">{demo && <div className="an-demo-banner"><span><strong>Demo workspace</strong> · These are sample records. Your real account is unchanged.</span><a href="/login">Create your workspace<ArrowRight size={15} /></a></div>}
-        <div className="an-heading"><div>{selectedPage && <button className="an-back" onClick={() => setSelectedPage(null)}><ArrowLeft size={15} />Back to {sections.find(item => item.id === section)?.label.toLowerCase()}</button>}<span className="an-eyebrow">YOUR DISTRIBUTION, CLEARLY</span><h1>{title}<span>.</span></h1><p>{detail ? 'Understand this page’s history, typical performance, and cost.' : section === 'overview' ? 'See what changed, what worked, and where to act next.' : section === 'pages' ? 'Keep every page, person, and page cost organised.' : section === 'performance' ? 'Compare like with like, on the same platform.' : section === 'posts' ? 'Find the posts behind your pages’ performance.' : section === 'economics' ? 'Connect page pay to the results you have actually recorded.' : section === 'monthly' ? 'A clear record of performance and page costs.' : 'Act on persistent changes, with the context behind each alert.'}</p></div><div className="an-heading-actions"><button className="an-button" onClick={exportVisibleSection} disabled={!analysis}><ArrowDownToLine size={16} />Export CSV</button><button className="an-button primary" disabled={demo || busy || !analysis?.pages.some(row => row.page.active)} onClick={() => refresh(detail ? [detail.page] : analysis!.pages.filter(row => row.page.active).map(row => row.page))}><RefreshCw size={16} className={refreshProgress ? 'spin' : ''} />{refreshProgress ? `Refreshing ${refreshProgress.current}/${refreshProgress.total}` : 'Refresh pages'}</button></div></div>
+        <div className="an-heading"><div>{selectedPage && <button className="an-back" onClick={() => setSelectedPage(null)}><ArrowLeft size={15} />Back to {sections.find(item => item.id === section)?.label.toLowerCase()}</button>}<span className="an-eyebrow">YOUR DISTRIBUTION, CLEARLY</span><h1>{title}<span>.</span></h1><p>{detail ? 'Understand this page’s history, typical performance, and cost.' : section === 'overview' ? 'See what changed, what worked, and where to act next.' : section === 'pages' ? 'Keep every page, person, and page cost organised.' : section === 'performance' ? 'Compare like with like, on the same platform.' : section === 'posts' ? 'Find the posts behind your pages’ performance.' : section === 'economics' ? 'Connect page pay to the results you have actually recorded.' : section === 'monthly' ? 'A clear record of performance and page costs.' : 'Act on persistent changes, with the context behind each alert.'}</p></div><div className="an-heading-actions">{updating && <span className="an-updating" role="status"><Loader2 size={15} className="spin" />Updating…</span>}<button className="an-button" onClick={exportVisibleSection} disabled={!analysis}><ArrowDownToLine size={16} />Export CSV</button><button className="an-button primary" disabled={demo || busy || !analysis?.pages.some(row => row.page.active)} onClick={() => refresh(detail ? [detail.page] : analysis!.pages.filter(row => row.page.active).map(row => row.page))}><RefreshCw size={16} className={refreshProgress ? 'spin' : ''} />{refreshProgress ? `Refreshing ${refreshProgress.current}/${refreshProgress.total}` : 'Refresh pages'}</button></div></div>
         <section className="an-filters" aria-label="Analysis filters"><div className="an-filter-row"><label className="an-period"><CalendarDays size={17} /><span className="sr-only">Date preset</span><select aria-label="Date preset" value={preset} onChange={event => choosePreset(event.target.value)}>{presets.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}<option value="custom">Custom dates</option></select></label><label>Platform<select value={platform} onChange={event => { setPlatform(event.target.value as AnalyticsPlatform | 'all'); setSelectedPage(null); }}><option value="all">All platforms</option>{platforms.map(item => <option key={item} value={item}>{platformNames[item]}</option>)}</select></label>{dataset?.collections?.length ? <label>Collection<select value={collectionId} onChange={event => { setCollectionId(event.target.value); setSelectedPage(null); }}><option value="">All collections</option>{dataset.collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}<label className="an-search"><Search size={17} /><input aria-label="Filter pages by name, handle, or responsible person" placeholder="Find a page or person" value={search} onChange={event => { setSearch(event.target.value); setSelectedPage(null); }} /><button type="button" aria-label="Clear page filter" onClick={() => setSearch('')} hidden={!search}><X size={14} /></button></label><label className="an-check"><input type="checkbox" checked={!!comparison} onChange={event => { const prior = previousRange(range); setComparison(event.target.checked ? prior : null); setCompareDraft(prior); }} />Compare dates</label></div>
-          <form className="an-dates" onSubmit={applyDates}><label>From<input aria-label="Range start" type="date" value={draft.from} onChange={event => setDraft({ ...draft, from: event.target.value })} required /></label><span>to</span><label>To<input aria-label="Range end" type="date" value={draft.to} onChange={event => setDraft({ ...draft, to: event.target.value })} required /></label>{comparison && <><span className="an-vs">compared with</span><label>Compare from<input aria-label="Comparison start" type="date" value={compareDraft.from} onChange={event => setCompareDraft({ ...compareDraft, from: event.target.value })} required /></label><label>Compare to<input aria-label="Comparison end" type="date" value={compareDraft.to} onChange={event => setCompareDraft({ ...compareDraft, to: event.target.value })} required /></label></>}<button className="an-button" type="submit">Apply dates</button><small>India time · both dates included</small></form>{rangeError && <p className="an-error-text" role="alert">{rangeError}</p>}
+          {preset !== 'custom' && !comparison ? <p className="an-range-summary"><span>{rangeLabel(range)}</span><small>India time · both dates included</small></p> : <form className="an-dates" onSubmit={applyDates}><label>From<input aria-label="Range start" type="date" value={draft.from} onChange={event => setDraft({ ...draft, from: event.target.value })} required /></label><span>to</span><label>To<input aria-label="Range end" type="date" value={draft.to} onChange={event => setDraft({ ...draft, to: event.target.value })} required /></label>{comparison && <><span className="an-vs">compared with</span><label>Compare from<input aria-label="Comparison start" type="date" value={compareDraft.from} onChange={event => setCompareDraft({ ...compareDraft, from: event.target.value })} required /></label><label>Compare to<input aria-label="Comparison end" type="date" value={compareDraft.to} onChange={event => setCompareDraft({ ...compareDraft, to: event.target.value })} required /></label></>}<button className="an-button" type="submit">Apply dates</button><small>India time · both dates included</small></form>}{rangeError && <p className="an-error-text" role="alert">{rangeError}</p>}
           <div className="an-view-mode"><div role="group" aria-label="View measurement"><button className={mode === 'gained' ? 'active' : ''} aria-pressed={mode === 'gained'} onClick={() => setMode('gained')}>Views gained during range</button><button className={mode === 'published' ? 'active' : ''} aria-pressed={mode === 'published'} onClick={() => setMode('published')}>Views on posts published in range</button></div><p>{mode === 'gained' ? 'Measured from snapshots. History starts when tracking begins.' : 'Latest saved lifetime views of those posts. This is not views earned during the selected dates.'}</p></div>
         </section>
         {refreshProgress && <div className="an-progress" role="status"><Loader2 size={18} className="spin" /><span>Refreshing page {refreshProgress.current} of {refreshProgress.total}. You can stop after the current page.</span><button className="an-button" onClick={() => { stopRefresh.current = true; }}>Stop after this page</button></div>}
