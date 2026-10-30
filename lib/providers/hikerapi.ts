@@ -1,4 +1,4 @@
-import { normalizeInstagramPost } from '../providers';
+import { instagramContentType, normalizeInstagramPost } from '../providers';
 import { boolean, checkPayload, collectPosts, count, envelopes, image, object, text } from './shared';
 import { ProviderError } from './types';
 import type { SocialDataProvider, StandardProfile } from './types';
@@ -40,11 +40,7 @@ export const hikerapi: SocialDataProvider = {
         const id = text(raw.pk, raw.id, raw.code, raw.shortcode);
         if (!id) return null;
         const post = normalizeInstagramPost({ ...raw, pk: id, play_count: count(raw.ig_play_count, raw.play_count) }, page);
-        return post ? { ...post, shares: null, saves: null,
-          type: raw.media_type === 8 || Array.isArray(raw.carousel_media) ? 'carousel'
-            : raw.media_type === 2 || raw.product_type === 'clips' || raw.is_video === true ? 'video'
-              : raw.media_type === 1 || raw.is_video === false ? 'image' : null,
-          sourceAssetId: null } : null;
+        return post ? { ...post, shares: null, saves: null, type: instagramContentType(raw), sourceAssetId: null } : null;
       },
     });
   },

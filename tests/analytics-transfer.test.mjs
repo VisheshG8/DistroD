@@ -12,7 +12,7 @@ test('analytics workspace backups preserve portable owner-scoped history atomica
       create schema auth;create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
       create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
       grant usage on schema auth to authenticated;grant execute on function auth.uid() to authenticated;`);
-    for(const name of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026020000_analytics_transfer.sql'])
+    for(const name of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql','20261026020000_analytics_transfer.sql','20261026030000_instagram_looter_performance.sql','20261029000000_content_dashboard.sql'])
       await pg.exec(readFileSync(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
     const {client}=testSupabase(pg);
     const call=async(owner,action,job=null,data={})=>{const response=await client.rpc('desk_workspace_transfer',{p_owner:owner,p_action:action,p_job:job,p_data:data});if(response.error)throw Object.assign(new Error(response.error.message),response.error);return response.data;};
@@ -28,6 +28,8 @@ test('analytics workspace backups preserve portable owner-scoped history atomica
     await pg.query(`insert into public.post_snapshots(owner,page_id,post_id,observed_at,views,likes,comments,shares,saves) values($1,$2,'video-one','2026-10-19T00:00:00Z',70,0,NULL,NULL,NULL)`,[source,page]);
     await pg.query(`update public.page_posts set source_asset_id='source-video-a' where page_id=$1`,[page]);
     await pg.query(`insert into public.alerts(id,owner,page_id,level,type,title,details,created_at,last_seen_at) values($1,$2,$3,'red','low-views','Views need attention','Two checks confirmed a decline.','2026-10-20T12:00:00Z','2026-10-20T12:00:00Z')`,[alert,source,page]);
+    await pg.query(`update public.pages set display_name='Page A',alert_quiet_days=4,end_date='2026-10-15' where id=$1`,[page]);
+    await pg.query(`update public.alerts set post_id='video-one' where id=$1`,[alert]);
     const upload=async(owner,value)=>{const bytes=Buffer.from(JSON.stringify(value));const start=await call(owner,'begin_import',null,{bytes:bytes.length});for(let index=0;index<start.total;index++)await call(owner,'upload',start.job,{index,chunk:bytes.subarray(index*524288,(index+1)*524288).toString('base64')});return start.job;};
     const exporting=async owner=>{const start=await call(owner,'begin_export'),chunks=[];for(let index=0;index<start.total;index++)chunks.push(Buffer.from((await call(owner,'read_export',start.job,{index})).chunk,'base64'));await call(owner,'cancel',start.job);return JSON.parse(Buffer.concat(chunks).toString('utf8'));};
     let archive,targetPage;
@@ -36,7 +38,8 @@ test('analytics workspace backups preserve portable owner-scoped history atomica
       archive=await exporting(source);
       assert.equal(archive.version,1);assert.equal(archive.workspace.analytics.version,1);
       const p=archive.workspace.pages[0];assert.equal(p.monthly_pay,2500.5);assert.equal(p.editor,'Editor name');assert.equal(p.start_date,'2026-09-03');assert.equal(p.active,false);assert.equal(p.notes,'Keep these notes');
-      const h=archive.workspace.analytics;assert.equal(h.pagePosts.length,1);assert.equal(h.pagePosts[0].source_asset_id,'source-video-a');assert.equal(h.accountSnapshots.length,2);assert.equal(h.postSnapshots.length,2);assert.equal(h.alerts.length,1);
+      assert.equal(p.display_name,'Page A');assert.equal(p.alert_quiet_days,4);assert.equal(p.end_date,'2026-10-15');
+      const h=archive.workspace.analytics;assert.equal(h.pagePosts.length,1);assert.equal(h.pagePosts[0].source_asset_id,'source-video-a');assert.equal(h.accountSnapshots.length,2);assert.equal(h.postSnapshots.length,2);assert.equal(h.alerts.length,1);assert.equal(h.alerts[0].post_id,'video-one');
       assert.equal(h.accountSnapshots.find(row=>row.observed_at.startsWith('2026-10-20')).followers,100,'same-day first observation remains real');
       const text=JSON.stringify(archive);for(const field of ['"owner"','tracked_account_id','provider_requests','provider_settings','latest_payload','sample_day','api_key','youtube_key'])assert.ok(!text.includes(field),field);
     });
@@ -48,9 +51,10 @@ test('analytics workspace backups preserve portable owner-scoped history atomica
       const result=await call(destination,'apply',job);targetPage=result.pageMap[0].target;
       assert.notEqual(targetPage,page);
       const p=(await pg.query('select * from public.pages where id=$1',[targetPage])).rows[0];assert.equal(Number(p.monthly_pay),2500.5);assert.equal(p.editor,'Editor name');assert.equal(p.active,false);assert.equal(p.notes,'Keep these notes');
+      assert.equal(p.display_name,'Page A');assert.equal(p.alert_quiet_days,4);assert.equal(new Date(p.end_date).toISOString().slice(0,10),'2026-10-15','an inactive page keeps its own pay end date, not the import day');
       const stored=(await pg.query('select * from public.page_posts where owner=$1',[destination])).rows[0];assert.equal(stored.page_id,targetPage);assert.equal(stored.payload.pageId,targetPage);assert.equal(stored.source_asset_id,'source-video-a');
       const first=(await pg.query("select * from public.account_snapshots where page_id=$1 and sample_day='2026-10-20'",[targetPage])).rows[0];assert.equal(Number(first.followers),100);assert.equal(new Date(first.observed_at).toISOString(),'2026-10-20T00:00:00.000Z');
-      const a=(await pg.query('select * from public.alerts where owner=$1',[destination])).rows[0];assert.notEqual(a.id,alert);assert.equal(a.page_id,targetPage);assert.equal(a.transfer_id,archive.workspace.analytics.alerts[0].transfer_id);
+      const a=(await pg.query('select * from public.alerts where owner=$1',[destination])).rows[0];assert.notEqual(a.id,alert);assert.equal(a.page_id,targetPage);assert.equal(a.transfer_id,archive.workspace.analytics.alerts[0].transfer_id);assert.equal(a.post_id,'video-one');
       assert.deepEqual(await call(destination,'apply',job),result,'a network retry is idempotent');
       assert.equal((await pg.query('select id from public.alerts where owner=$1',[source])).rows[0].id,alert);
     });
@@ -68,9 +72,17 @@ test('analytics workspace backups preserve portable owner-scoped history atomica
       assert.equal((await pg.query('select * from public.account_snapshots where owner=$1',[destination])).rows.length,2);
     });
     await t.test('old version-1 files still import without resetting newer metadata',async()=>{
-      const old=structuredClone(archive);delete old.workspace.analytics;for(const key of ['monthly_pay','editor','start_date','active','notes'])delete old.workspace.pages[0][key];
+      const old=structuredClone(archive);delete old.workspace.analytics;for(const key of ['monthly_pay','editor','start_date','active','notes','display_name','alert_quiet_days','end_date'])delete old.workspace.pages[0][key];
       const job=await upload(destination,old);await call(destination,'preview',job);await call(destination,'apply',job,{overwrite:true});
       assert.equal(Number((await pg.query('select monthly_pay from public.pages where id=$1',[targetPage])).rows[0].monthly_pay),999);
+      assert.equal((await pg.query('select display_name,alert_quiet_days from public.pages where id=$1',[targetPage])).rows[0].display_name,'Page A','older backups leave the newer Page Master fields alone');
+      for(const [key,value] of [['alert_quiet_days',0],['alert_quiet_days',2.5],['display_name','x'.repeat(151)],['end_date','2026-02-30']]){
+        const bad=structuredClone(archive);bad.workspace.pages[0][key]=value;const badJob=await upload(destination,bad);
+        await assert.rejects(call(destination,'preview',badJob),/Quiet-day|display names|end date/,key);await call(destination,'cancel',badJob);
+      }
+      const paused=structuredClone(archive);delete paused.workspace.analytics;delete paused.workspace.pages[0].end_date;
+      const pausedJob=await upload(destination,paused);await call(destination,'preview',pausedJob);await call(destination,'apply',pausedJob,{overwrite:true});
+      assert.equal(new Date((await pg.query('select end_date from public.pages where id=$1',[targetPage])).rows[0].end_date).toISOString().slice(0,10),'2026-10-15','an older backup keeps the end date of a page that was already paused');
       const fresh=await user(),freshJob=await upload(fresh,old);await call(fresh,'preview',freshJob);await call(fresh,'apply',freshJob);
       assert.equal((await pg.query('select * from public.pages where owner=$1',[fresh])).rows.length,1);
     });

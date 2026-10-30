@@ -167,7 +167,7 @@ test('verified User Media V2 envelope retains returned likes despite its disable
   assert.equal(calls, 2); assert.equal(result.posts.length, 1); assert.equal(result.coverage.complete, true);
   assert.equal(result.posts[0].id, '4007110762244757234'); assert.equal(result.posts[0].views, 4121);
   assert.equal(result.posts[0].likes, 3); assert.equal(result.posts[0].likesReason, null);
-  assert.equal(result.posts[0].comments, 0); assert.equal(result.posts[0].type, 'video');
+  assert.equal(result.posts[0].comments, 0); assert.equal(result.posts[0].type, 'reel');
   assert.equal(result.posts[0].url, 'https://www.instagram.com/p/DecHgH3Plby/');
 });
 

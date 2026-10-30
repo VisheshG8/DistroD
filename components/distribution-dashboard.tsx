@@ -168,9 +168,11 @@ export default function DistributionDashboard({account}:{account:WorkspaceAccoun
     if (!targets.length || progress) return; stop.current = false; setError(""); let success = 0; const failures: string[] = [];
     for (let i = 0; i < targets.length; i++) {
       if (stop.current) break; setProgress({ current: i + 1, total: targets.length, handle: targets[i].handle });
-      try { const res = await fetch("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pageId: targets[i].id, scope: activeScope }) }); const r = await res.json().catch(() => ({})) as { error?: string; page?: Page }; if (!res.ok) throw new Error(r.error || "Refresh failed"); success++; if (r.page) { const updated = r.page; setData(d => ({ ...d, pages: d.pages.map(p => p.id === updated.id ? updated : p) })); } }
+      try { const res = await fetch("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pageId: targets[i].id, scope: activeScope, reconcile: false }) }); const r = await res.json().catch(() => ({})) as { error?: string; page?: Page }; if (!res.ok) throw new Error(r.error || "Refresh failed"); success++; if (r.page) { const updated = r.page; setData(d => ({ ...d, pages: d.pages.map(p => p.id === updated.id ? updated : p) })); } }
       catch (e) { failures.push(`${targets[i].handle}: ${e instanceof Error ? e.message : "Refresh failed"}`); }
     }
+    // Alerts are checked once for the whole batch, not once per page.
+    if (success) await fetch("/api/analytics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "reconcileAlerts" }) }).catch(() => undefined);
     try { await load(); } catch (e) { failures.push(e instanceof Error ? e.message : "Could not reload workspace"); }
     setProgress(null); setNotice(`${success} ${success === 1 ? "page refreshed" : "pages refreshed"}${stop.current ? " · stopped after the current page" : ""}.`);
     if (failures.length) setError(failures.slice(0, 4).join("\n") + (failures.length > 4 ? `\nAnd ${failures.length - 4} more. Check each page's refresh status.` : ""));

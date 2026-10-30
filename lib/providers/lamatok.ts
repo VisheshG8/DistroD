@@ -1,4 +1,4 @@
-import { normalizeTikTokPost } from '../providers';
+import { normalizeTikTokPost, tiktokContentType } from '../providers';
 import { boolean, checkPayload, collectPosts, count, envelopes, image, object, text } from './shared';
 import { ProviderError } from './types';
 import type { SocialDataProvider, StandardProfile } from './types';
@@ -51,8 +51,7 @@ export const lamatok: SocialDataProvider = {
         const id = text(raw.aweme_id, raw.id);
         if (!id) return null;
         const post = normalizeTikTokPost({ ...raw, ...(raw.aweme_id !== undefined ? { aweme_id: id } : { id }) }, page);
-        return post ? { ...post, type: raw.image_post_info || Array.isArray(raw.imagePost?.images) ? 'carousel' : raw.video ? 'video' : null,
-          sourceAssetId: null } : null;
+        return post ? { ...post, type: tiktokContentType(raw), sourceAssetId: null } : null;
       },
     });
   },

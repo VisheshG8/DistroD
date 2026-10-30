@@ -93,3 +93,13 @@ test('missing continuation, cursor loops, and mixed observation cutoffs fail clo
     await assert.rejects(load(new URLSearchParams()),mode==='missing'?/fully loaded/:mode==='loop'?/too large/:/changed while loading/);
   }
 });
+
+test('saved posts keep fractional durations while counters stay whole',()=>{
+  const source=readFileSync(new URL('../lib/analytics/server.ts',import.meta.url),'utf8').replace(/^import[^;]*;\r?\n/gm,'');
+  const analyticsPost=new Script(stripTypeScriptTypes(source,{mode:'transform'}).replace(/\bexport\s+/g,'')+'\nanalyticsPost').runInNewContext({Error});
+  const post=analyticsPost({post_id:'p',page_id:'page',payload:{durationSeconds:12.4,views:10.5,likes:3}});
+  assert.equal(post.durationSeconds,12.4);assert.equal(post.views,null);assert.equal(post.likes,3);
+  assert.equal(analyticsPost({payload:{durationSeconds:1.23456}}).durationSeconds,1.235);
+  assert.equal(post.audioId,null);assert.equal(analyticsPost({payload:{type:'reel',audioId:'1789'}}).audioId,'1789');assert.equal(analyticsPost({payload:{type:'reel'}}).type,'reel');
+  for(const durationSeconds of [-1,Infinity,'12',90000])assert.equal(analyticsPost({payload:{durationSeconds}}).durationSeconds,null);
+});

@@ -74,6 +74,7 @@ test('LamaTok resolves secUid once then paginates the documented v2 endpoint', a
   assert.equal(result.followers, 0); assert.equal(result.posts[0].durationSeconds, 12);
   assert.equal(result.posts[0].shares, 0); assert.equal(result.posts[0].saves, 0);
   assert.equal(result.posts[1].shares, null); assert.equal(result.profile.isVerified, true);
+  assert.equal(result.posts[0].type, 'video'); assert.equal(result.posts[0].audioId, null);
 });
 
 test('missing profile or unrecognized media shape fails instead of replacing data with an empty success', async () => {

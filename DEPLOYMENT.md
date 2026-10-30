@@ -4,9 +4,9 @@ The app uses Next.js, Supabase Auth/PostgreSQL, and the Supabase SDK over HTTPS.
 
 ## 1. Apply database migrations
 
-For a new Supabase project, run all ten files once, in this order. For an existing installation, run only the files that have not already been applied.
+For a new Supabase project, run all eleven files once, in this order. For an existing installation, run only the files that have not already been applied.
 
-**If you already ran the three V2 migrations:** apply only `20261026030000_instagram_looter_performance.sql`. If only the first six are applied, run files 7–10 below in order.
+**If you already ran the three V2 migrations:** apply `20261026030000_instagram_looter_performance.sql` (if not yet applied) and then `20261029000000_content_dashboard.sql`. If only the first six are applied, run files 7–11 below in order.
 
 | Order | Migration | Purpose |
 |---:|---|---|
@@ -20,6 +20,7 @@ For a new Supabase project, run all ten files once, in this order. For an existi
 | 8 | [20261026015000_analytics_operations.sql](./supabase/migrations/20261026015000_analytics_operations.sql) | Owner-safe page creation/assignment and metadata operations |
 | 9 | [20261026020000_analytics_transfer.sql](./supabase/migrations/20261026020000_analytics_transfer.sql) | Metadata/history/alert backup and restore, compatible with old backups |
 | 10 | [20261026030000_instagram_looter_performance.sql](./supabase/migrations/20261026030000_instagram_looter_performance.sql) | Encrypted RapidAPI key, ordered query indexes and transactional monthly provider counters |
+| 11 | [20261029000000_content_dashboard.sql](./supabase/migrations/20261029000000_content_dashboard.sql) | Page Master display name, pay end date and quiet-day alert setting; start dates default to the day a page is added; content links; alerts keep unchecked pages open and name their post |
 
 Apply file 10 before deploying this version. It preserves existing provider selections and scheduling. Run it during a quiet period: index creation and counter backfill take write locks. It is a transaction, so a failure rolls back its changes. Let it complete before retrying; inspect the error first. It does not delete customer records or old migration history.
 
@@ -188,4 +189,4 @@ npm run import:legacy -- --file workspace-export.json --owners owner-map.json --
 - Auth redirects depend on the exact app origin, callback allowlist, and a rebuild after public-variable changes. Email delivery depends on SMTP/provider settings.
 - Provider failures can mean missing keys, an incorrect adapter order, provider balance/availability, or a request/budget limit. Saved data should remain available.
 - Scores showing insufficient data are expected until enough real day-seven observations exist. Historical follower values cannot be recovered by rerunning a fetch.
-- No optional email summary, WhatsApp delivery, or cross-page source-video matching is configured in this release.
+- No optional email summary or WhatsApp delivery is configured in this release. Cross-page content matching runs in the browser and only suggests links; the owner confirms each one.

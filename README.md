@@ -49,7 +49,7 @@ npm ci
 Copy-Item .env.example .env.local
 ```
 
-For an existing installation, keep `.env.local` and its current keys, especially `APP_ENCRYPTION_KEY`; add only missing variables from the example. Fill in configuration and apply the migration sequence in [DEPLOYMENT.md](./DEPLOYMENT.md). Existing databases need **only missing migrations, once, in filename order**. If you already applied the three V2 migrations through `20261026020000_analytics_transfer.sql`, apply only the new `20261026030000_instagram_looter_performance.sql`. A fresh database needs all ten. Do not rerun the initial schema or edit an already-applied migration.
+For an existing installation, keep `.env.local` and its current keys, especially `APP_ENCRYPTION_KEY`; add only missing variables from the example. Fill in configuration and apply the migration sequence in [DEPLOYMENT.md](./DEPLOYMENT.md). Existing databases need **only missing migrations, once, in filename order**. If you already applied the three V2 migrations through `20261026020000_analytics_transfer.sql`, apply `20261026030000_instagram_looter_performance.sql` (if missing) and then `20261029000000_content_dashboard.sql`. A fresh database needs all eleven. Do not rerun the initial schema or edit an already-applied migration.
 
 ```powershell
 npm run check:env
@@ -141,6 +141,7 @@ To add a provider, implement `SocialDataProvider` in `lib/providers/types.ts`, n
 ## Deliberate limits
 
 - No payments, plan gating, View tier, pricing page, or user impersonation.
-- Optional daily email summaries, WhatsApp delivery, and matching source videos across pages are not implemented. `source_asset_id` is reserved and preserved for later matching.
+- Optional daily email summaries and WhatsApp delivery are not implemented.
+- Page × Content (06) suggests the same video on different pages from captions (hashtags, mentions and emoji ignored), length, publish dates within 21 days and shared audio. Nothing is linked until the owner confirms a suggestion; a confirmed group stores a shared `ca_<uuid>` in `page_posts.source_asset_id`, "Not the same" stores `solo_<uuid>`, and Unlink clears it. Thumbnails are not compared.
 - Adding a page saves it and attempts an immediate fetch; there is no separate profile-confirmation preview before saving.
 - The demo is an isolated synthetic dataset, not a script that seeds customers into production.

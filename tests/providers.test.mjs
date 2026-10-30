@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fetchPage, parseCounter, normalizeDate, normalizeInstagramPost,
-  normalizeTikTokPost, normalizeYouTubePost,
+  normalizeTikTokPost, normalizeYouTubePost, instagramContentType, tiktokContentType,
 } from '../lib/providers.ts';
 
 const settings = { provider: 'tikhub', postLimit: 3, apiKey: 'fixture-key', youtubeKey: '' };
@@ -129,6 +129,7 @@ test('ScrapeCreators fetches both YouTube tabs without per-video enrichment call
   assert.deepEqual(result.posts.map(p => p.id), ['short', 'long']);
   assert.equal(result.posts[0].likes, 0);
   assert.equal(result.posts[1].likes, null);
+  assert.deepEqual(result.posts.map(p => p.type), ['short', 'video']);
 });
 
 test('official YouTube fetches 100 uploads in five requests and preserves missing metrics', async () => {
@@ -256,4 +257,43 @@ test('a final oversized feed cannot falsely claim complete date coverage past th
   assert.equal(result.coverage.complete,false);
   assert.equal(result.coverage.incomplete,true);
   assert.equal(result.coverage.stopReason,'post-scan-limit');
+});
+
+test('content type, audio and fractional durations come from the provider payload, never guessed', () => {
+  assert.equal(instagramContentType({ media_type: 2, product_type: 'clips' }), 'reel');
+  assert.equal(instagramContentType({ media_type: 2, product_type: 'igtv' }), 'video');
+  assert.equal(instagramContentType({ __typename: 'XDTGraphSidecar' }), 'carousel');
+  assert.equal(instagramContentType({ media_type: 8, product_type: 'carousel_container' }), 'carousel');
+  assert.equal(instagramContentType({ __typename: 'GraphImage' }), 'image');
+  assert.equal(instagramContentType({}), null);
+  const reel = normalizeInstagramPost({ pk: '1', media_type: 2, product_type: 'clips', video_duration: 12.416,
+    clips_metadata: { original_sound_info: { audio_asset_id: '1789012345678901' } } }, page);
+  assert.equal(reel.type, 'reel'); assert.equal(reel.durationSeconds, 12.416); assert.equal(reel.audioId, '1789012345678901');
+  assert.equal(normalizeInstagramPost({ pk: '2', clips_metadata: { music_info: { music_asset_info: { audio_cluster_id: 98765 } } } }, page).audioId, '98765');
+  // An unsafe numeric ID has already lost precision, and an absent one stays null.
+  assert.equal(normalizeInstagramPost({ pk: '3', clips_metadata: { original_sound_info: { audio_asset_id: 2 ** 60 } } }, page).audioId, null);
+  assert.equal(normalizeInstagramPost({ pk: '4' }, page).type, null);
+  const tiktok = { ...page, platform: 'tiktok' };
+  const video = normalizeTikTokPost({ aweme_id: '8', video: { duration: 15123 }, music: { id: 7012345678901234567, id_str: '7012345678901234567' } }, tiktok);
+  assert.equal(video.type, 'video'); assert.equal(video.durationSeconds, 15.123); assert.equal(video.audioId, '7012345678901234567');
+  assert.equal(normalizeTikTokPost({ id: '9', video: { duration: 9.5 }, music: { id: '701' } }, tiktok).durationSeconds, 9.5);
+  assert.equal(tiktokContentType({ image_post_info: { images: [] } }), 'carousel');
+  assert.equal(normalizeTikTokPost({ id: '10', imagePost: { images: [{}] } }, tiktok).type, 'carousel');
+  assert.equal(normalizeTikTokPost({ id: '11' }, tiktok).type, null);
+  const youtube = { ...page, platform: 'youtube' };
+  assert.equal(normalizeYouTubePost({ id: 'a', contentDetails: { duration: 'PT45S' } }, youtube).type, 'video');
+  assert.equal(normalizeYouTubePost({ id: 'b' }, youtube, 'short').type, 'short');
+  assert.equal(normalizeYouTubePost({ id: 'c', url: 'https://www.youtube.com/shorts/c' }, youtube).type, 'short');
+  assert.equal(normalizeYouTubePost({ id: 'd' }, youtube).audioId, null);
+  // Numeric strings are durations too: YouTube's lengthSeconds, and TikTok app milliseconds.
+  assert.equal(normalizeYouTubePost({ id: 'e', lengthSeconds: '245' }, youtube).durationSeconds, 245);
+  assert.equal(normalizeTikTokPost({ aweme_id: '12', video: { duration: '15123' } }, tiktok).durationSeconds, 15.123);
+  assert.equal(normalizeTikTokPost({ id: '13', video: { duration: '9.5' } }, tiktok).durationSeconds, 9.5);
+});
+
+test('a legacy Instagram refresh keeps the content type', async () => {
+  const result = await fetchPage(page, settings, async () => ({ code: 200, data: { user: { id: '123' }, items: [
+    { pk: '1', media_type: 2, product_type: 'clips', play_count: 4, taken_at: 1790200000 },
+    { pk: '2', media_type: 8, carousel_media: [], taken_at: 1790100000 }], more_available: false } }));
+  assert.deepEqual(result.posts.map(p => p.type), ['reel', 'carousel']);
 });
