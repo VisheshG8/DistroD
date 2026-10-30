@@ -1,7 +1,7 @@
 import 'server-only';
 import { ApiError, database, query } from '@/lib/server';
 import { scopeFromDates } from '@/lib/scope';
-import { alertCandidates, rangeForPreset } from './metrics';
+import { alertCheck, rangeForPreset } from './metrics';
 import { validId, validRange } from './input';
 import type { AnalyticsDataset, AnalyticsPage, AnalyticsPost, AnalyticsAlert } from './types';
 
@@ -11,12 +11,14 @@ type Stage = typeof stages[number];
 type Cursor = {stage:Stage;offset:number;at:string;range:string};
 type Row = Record<string, unknown>;
 const counter = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+// Durations are fractional seconds (Instagram 12.4, TikTok ms ÷ 1000), so they are not counters.
+const seconds = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 86400 ? Math.round(value * 1000) / 1000 : null;
 const string = (value: unknown, max = 2000) => typeof value === 'string' ? value.slice(0,max) : '';
 const date = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const url = (value: unknown) => typeof value === 'string' && /^https:\/\//i.test(value) ? value.slice(0,1000) : '';
 export function analyticsPost(row: Row): AnalyticsPost {
   const p = row.payload && typeof row.payload === 'object' ? row.payload as Row : row;
-  return {id:string(row.post_id || p.id,300),pageId:string(row.page_id || p.pageId,100),platform:string(p.platform,20),url:url(p.url),title:string(p.title || p.caption,1000),publishedAt:date(p.publishedAt),thumbnail:url(p.thumbnail) || null,durationSeconds:counter(p.durationSeconds),views:counter(p.views),likes:counter(p.likes),comments:counter(p.comments),shares:counter(p.shares),saves:counter(p.saves),type:string(p.type,50) || null,sourceAssetId:string(row.source_asset_id,300) || null,observedAt:date(row.observed_at)};
+  return {id:string(row.post_id || p.id,300),pageId:string(row.page_id || p.pageId,100),platform:string(p.platform,20),url:url(p.url),title:string(p.title || p.caption,1000),publishedAt:date(p.publishedAt),thumbnail:url(p.thumbnail) || null,durationSeconds:seconds(p.durationSeconds),views:counter(p.views),likes:counter(p.likes),comments:counter(p.comments),shares:counter(p.shares),saves:counter(p.saves),type:string(p.type,50) || null,audioId:string(p.audioId,200) || null,sourceAssetId:string(row.source_asset_id,300) || null,observedAt:date(row.observed_at)};
 }
 function bounds(params: URLSearchParams) {
   const fallback = rangeForPreset('30d');
@@ -40,7 +42,7 @@ export async function analyticsChunk(ownerId:string, params:URLSearchParams) {
   const cursor=decodeCursor(params.get('cursor'),window.key),at=cursor?.at || new Date().toISOString(),db=database();
   const encode=(stage:Stage,offset:number)=>Buffer.from(JSON.stringify({stage,offset,at,range:window.key})).toString('base64url');
   if (!cursor) {
-    let select=db.from('pages').select('id,platform,handle,url,name,followers,last_synced_at,sync_error,monthly_pay,editor,start_date,active,notes,coverage').eq('owner',ownerId).order('id');
+    let select=db.from('pages').select('id,platform,handle,url,name,followers,last_synced_at,sync_error,monthly_pay,editor,start_date,active,notes,coverage,display_name,end_date,alert_quiet_days').eq('owner',ownerId).order('id');
     if(window.pageId)select=select.eq('id',window.pageId);
     // Existing workspace limits bound this metadata to 500 pages and 100 collections.
     // A scoped page needs only its own groups; never infer ownership from the URL.
@@ -51,7 +53,7 @@ export async function analyticsChunk(ownerId:string, params:URLSearchParams) {
     ]);
     const collectionIds=pageMemberships ? new Set(pageMemberships.map(r=>String(r.collection_id))) : null;
     const collections=(collectionRows || []).filter(r=>!collectionIds || collectionIds.has(String(r.id))).map(r=>({id:string(r.id,100),name:string(r.name,100)}));
-    const pages:AnalyticsPage[]=(rows || []).map(r=>({id:string(r.id),platform:r.platform as AnalyticsPage['platform'],handle:string(r.handle,100),url:url(r.url),name:string(r.name,300),followers:counter(r.followers),lastSyncedAt:date(r.last_synced_at),syncError:string(r.sync_error,500)||null,posts:[],monthlyPay:r.monthly_pay==null?null:Number(r.monthly_pay),editor:string(r.editor,150),startDate:typeof r.start_date==='string'?r.start_date.slice(0,10):null,active:r.active!==false,notes:string(r.notes),coverage:r.coverage&&typeof r.coverage==='object'?r.coverage as AnalyticsPage['coverage']:undefined}));
+    const pages:AnalyticsPage[]=(rows || []).map(r=>({id:string(r.id),platform:r.platform as AnalyticsPage['platform'],handle:string(r.handle,100),url:url(r.url),name:string(r.name,300),followers:counter(r.followers),lastSyncedAt:date(r.last_synced_at),syncError:string(r.sync_error,500)||null,posts:[],monthlyPay:r.monthly_pay==null?null:Number(r.monthly_pay),editor:string(r.editor,150),startDate:typeof r.start_date==='string'?r.start_date.slice(0,10):null,active:r.active!==false,notes:string(r.notes),displayName:string(r.display_name,150),endDate:typeof r.end_date==='string'?r.end_date.slice(0,10):null,alertQuietDays:Number.isInteger(r.alert_quiet_days)?Number(r.alert_quiet_days):null,coverage:r.coverage&&typeof r.coverage==='object'?r.coverage as AnalyticsPage['coverage']:undefined}));
     return {pages,collections,generatedAt:at,nextCursor:pages.length?encode('posts',0):null,parallelCursors:pages.length?stages.map(stage=>encode(stage,0)):[]};
   }
   const {stage,offset}=cursor;
@@ -64,7 +66,7 @@ export async function analyticsChunk(ownerId:string, params:URLSearchParams) {
     return {generatedAt:at,memberships:rows.map(r=>({collectionId:string(r.collection_id,100),pageId:string(r.page_id,100)})),nextCursor:nextStageCursor,nextStageCursor};
   }
   const table=stage==='posts'?'page_posts':stage==='accounts'?'account_snapshots':stage==='snapshots'?'post_snapshots':'alerts';
-  const columns:string=stage==='posts'?'post_id,page_id,payload,source_asset_id,observed_at':stage==='accounts'?'page_id,observed_at,followers,following,post_count':stage==='snapshots'?'page_id,post_id,observed_at,views,likes,comments,shares,saves':'id,page_id,level,type,title,details,created_at,resolved_at';
+  const columns:string=stage==='posts'?'post_id,page_id,payload,source_asset_id,observed_at':stage==='accounts'?'page_id,observed_at,followers,following,post_count':stage==='snapshots'?'page_id,post_id,observed_at,views,likes,comments,shares,saves':'id,page_id,level,type,title,details,created_at,resolved_at,post_id';
   let select=db.from(table).select(columns).eq('owner',ownerId);
   if(window.pageId)select=select.eq('page_id',window.pageId);
   if(stage==='posts')select=select.lte('created_at',at).order('page_id').order('post_id');
@@ -78,9 +80,11 @@ export async function analyticsChunk(ownerId:string, params:URLSearchParams) {
   if(stage==='posts')return {...base,posts:rows.map(analyticsPost)};
   if(stage==='accounts')return {...base,accountSnapshots:rows.map(r=>({pageId:string(r.page_id),observedAt:date(r.observed_at)!,followers:counter(r.followers),following:counter(r.following),postCount:counter(r.post_count)}))};
   if(stage==='snapshots')return {...base,postSnapshots:rows.map(r=>({pageId:string(r.page_id),postId:string(r.post_id,300),observedAt:date(r.observed_at)!,views:counter(r.views),likes:counter(r.likes),comments:counter(r.comments),shares:counter(r.shares),saves:counter(r.saves)}))};
-  return {...base,alerts:rows.map(r=>({id:string(r.id),pageId:string(r.page_id),level:r.level as AnalyticsAlert['level'],type:string(r.type,64),title:string(r.title,200),details:string(r.details),createdAt:date(r.created_at)!,resolvedAt:date(r.resolved_at)}))};
+  return {...base,alerts:rows.map(r=>({id:string(r.id),pageId:string(r.page_id),level:r.level as AnalyticsAlert['level'],type:string(r.type,64),title:string(r.title,200),details:string(r.details),createdAt:date(r.created_at)!,resolvedAt:date(r.resolved_at),postId:string(r.post_id,300)||null}))};
 }
-export async function reconcileWorkspaceAlerts(ownerId:string, now=new Date()):Promise<void> {
+export type AlertReconciliation = {opened:number;resolved:number;unchecked:number};
+/** Pages the engine could not check now keep their open alerts; null means the history was too large to check. */
+export async function reconcileWorkspaceAlerts(ownerId:string, now=new Date()):Promise<AlertReconciliation|null> {
   const range=rangeForPreset('90d',now),params=new URLSearchParams(range);
   const dataset:AnalyticsDataset={pages:[],accountSnapshots:[],postSnapshots:[],alerts:[],generatedAt:now.toISOString()};
   const posts:AnalyticsPost[]=[];
@@ -94,11 +98,13 @@ export async function reconcileWorkspaceAlerts(ownerId:string, now=new Date()):P
     if('alerts' in chunk)dataset.alerts.push(...(chunk.alerts || []));
     if(!chunk.nextCursor)break;
     // An incomplete history must never generate misleading alerts.
-    if(++chunks>200)return;
+    if(++chunks>200)return null;
     params.set('cursor',chunk.nextCursor);
   } while(true);
   const grouped=new Map<string,AnalyticsPost[]>();
   for(const post of posts){const list=grouped.get(post.pageId)||[];list.push(post);grouped.set(post.pageId,list);}
   for(const page of dataset.pages)page.posts=grouped.get(page.id)||[];
-  await query(database().rpc('desk_reconcile_alerts',{p_owner:ownerId,p_candidates:alertCandidates(dataset,now),p_observed_at:now.toISOString()}));
+  const check=alertCheck(dataset,now),skip=[...new Set(check.unchecked.map(item=>item.pageId))];
+  const result=await query(database().rpc('desk_reconcile_alerts',{p_owner:ownerId,p_candidates:check.candidates,p_observed_at:now.toISOString(),p_skip_pages:skip})) as {opened:number;resolved:number};
+  return {opened:Number(result?.opened)||0,resolved:Number(result?.resolved)||0,unchecked:skip.length};
 }

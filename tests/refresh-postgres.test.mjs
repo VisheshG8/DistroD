@@ -32,7 +32,7 @@ async function fixture(){
     insert into public.pages(id,owner,platform,handle,url,name,posts,coverage)values('${sourceId}','${user}','youtube','source','https://youtube.com/@source','Source','[{"views":10}]','{}');
     insert into public.memberships values('${c1}','${sourceId}','${user}');
     insert into public.settings(owner,provider,api_key,youtube_key,request_limit)values('${user}','scrapecreators','provider-key','youtube-key',10);`);
-  const state={now:Date.parse('2026-10-24T12:00:00Z'),requestLimit:10,requests:0,timeouts:[],loseLease:false,alias:false,providerMode:'success',beforeRequestMs:0,authUser:{userId:user,email:'user@example.test',displayName:'User',fullName:'User'}};
+  const state={reconciles:[],reconcileError:false,now:Date.parse('2026-10-24T12:00:00Z'),requestLimit:10,requests:0,timeouts:[],loseLease:false,alias:false,providerMode:'success',beforeRequestMs:0,authUser:{userId:user,email:'user@example.test',displayName:'User',fullName:'User'}};
   const {client:db,calls}=testSupabase(pg);
   class ClockDate extends Date{constructor(...args){super(...(args.length?args:[state.now]));}static now(){return state.now;}}
   const base={Date:ClockDate,URL,Response,Request,JSON,Number,Math,AbortController,clearTimeout,setTimeout:(fn,ms)=>{if(ms>=1000)state.timeouts.push(ms);return setTimeout(fn,ms);},crypto:{randomUUID},Buffer,TextDecoder,Uint8Array,
@@ -49,7 +49,7 @@ async function fixture(){
   const payload=loadTs('../lib/providers/shared.ts',['checkPayload'],context);
   const transport=loadTs('../lib/providers/request.ts',['createProviderRequest'],{...context,...payload});
   const service=loadTs('../lib/refresh-service.ts',['refreshWorkspacePage'],{...context,...transport});
-  const route=loadTs('../app/api/refresh/route.ts',['POST','maxDuration','runtime'],{...context,...service});
+  const route=loadTs('../app/api/refresh/route.ts',['POST','maxDuration','runtime'],{...context,...service,reconcileWorkspaceAlerts:async ownerId=>{state.reconciles.push(ownerId);if(state.reconcileError)throw new Error('alert check failed');}});
   const desk=loadTs('../app/api/desk/route.ts',['GET','POST'],context);
   const post=(pageId=sourceId)=>route.POST(new Request('https://app.test/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pageId,scope})}));
   const mutate=async body=>{const response=await desk.POST(new Request('https://app.test/api/desk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));return {response,body:await response.json()};};
@@ -67,6 +67,10 @@ test('SDK refresh saves JSONB snapshots and releases its lease through the named
     assert.equal(Number((await f.pg.query('select requests from public.usage')).rows[0].requests),1);assert.equal(f.state.requests,1);
     assert.ok(f.calls.some(call=>call.path==='/rest/v1/rpc/desk_save_refresh'));
     assert.ok(f.calls.some(call=>call.path==='/rest/v1/rpc/desk_reserve_usage'));
+    assert.deepEqual(f.state.reconciles,[user],'a manual refresh reconciles the signed-in workspace alerts');
+    const send=data=>f.route.POST(new Request('https://app.test/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pageId:sourceId,scope,...data})}));
+    assert.equal((await send({reconcile:false})).status,200);assert.equal(f.state.reconciles.length,1,'a batch can defer the check to its last page');
+    f.state.reconcileError=true;assert.equal((await send({})).status,200,'a failed alert check never fails the saved refresh');assert.equal(f.state.reconciles.length,2);
   }finally{await f.close();}
 });
 test('SDK quota reservation is atomic across refreshes and never spends beyond the cap',async()=>{
@@ -82,7 +86,7 @@ test('provider timeout respects the remaining refresh deadline and preserves pre
     f.state.beforeRequestMs=175000;
     let response=await f.post();assert.equal(response.status,200,await response.clone().text());assert.equal(f.state.timeouts[0],5000);
     await f.pg.query('update public.pages set last_synced_at=null,posts=$1::jsonb where id=$2',[JSON.stringify([{views:25}]),sourceId]);
-    f.state.beforeRequestMs=0;f.state.providerMode='timeout';response=await f.post();assert.equal(response.status,400);
+    f.state.beforeRequestMs=0;f.state.providerMode='timeout';response=await f.post();assert.equal(response.status,400);assert.equal(f.state.reconciles.length,1,'a failed refresh checks no alerts');
     const saved=(await f.pg.query('select posts,locked_until,sync_error from public.pages where id=$1',[sourceId])).rows[0];
     assert.equal(saved.posts[0].views,25);assert.equal(Number(saved.locked_until),0);assert.match(saved.sync_error,/safety limit/);
   }finally{await f.close();}

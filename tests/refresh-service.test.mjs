@@ -25,7 +25,7 @@ async function fixture(){
     create schema auth;create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     grant usage on schema auth to authenticated;grant execute on function auth.uid() to authenticated;`);
-  for(const file of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql','20261026020000_analytics_transfer.sql','20261026030000_instagram_looter_performance.sql'])
+  for(const file of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql','20261026020000_analytics_transfer.sql','20261026030000_instagram_looter_performance.sql','20261029000000_content_dashboard.sql'])
     await pg.exec(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   await pg.query(`insert into auth.users(id,email) values($1,'one@example.test'),($2,'two@example.test')`,[one,two]);
   await pg.query(`insert into public.collections(id,owner,name) values($1,$2,'One'),($3,$4,'Two')`,[collectionOne,one,collectionTwo,two]);

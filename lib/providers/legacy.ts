@@ -36,5 +36,5 @@ export async function fetchLegacy(provider: ProviderId, page: PageInput, context
   };
   return { ...result, provider, profile, posts: result.posts.map(post => ({ ...post,
     ...(page.platform === 'instagram' ? { saves: null, shares: null } : {}),
-    type: page.platform === 'youtube' ? 'video' : null, sourceAssetId: null })) };
+    type: post.type ?? (page.platform === 'youtube' ? 'video' : null), sourceAssetId: null })) };
 }

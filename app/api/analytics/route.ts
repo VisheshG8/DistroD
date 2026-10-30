@@ -1,6 +1,6 @@
 import {ApiError,body,database,fail,guard,json,owner,query} from '@/lib/server';
-import {analyticsChunk} from '@/lib/analytics/server';
-import {pageMetadata,validId} from '@/lib/analytics/input';
+import {analyticsChunk,reconcileWorkspaceAlerts} from '@/lib/analytics/server';
+import {activeInput,contentLink,pageMetadata,validId} from '@/lib/analytics/input';
 import {addManagedPage} from '@/lib/analytics/operations';
 export const dynamic='force-dynamic';
 export const runtime='nodejs';
@@ -23,6 +23,21 @@ export async function POST(request:Request){try{
     const id=validated(()=>validId(data.id));
     const rows=await query(db.from('alerts').update({resolved_at:new Date().toISOString()}).eq('id',id).eq('owner',user).select('id'));
     if(!rows?.length)throw new ApiError('Alert not found.',404);return json({ok:true});
+  }
+  if(data.action==='setActive'){
+    // Only the status changes; the database ends pay today on deactivation and clears the end date on reactivation.
+    const {pageId,active}=validated(()=>activeInput(data));
+    const rows=await query(db.from('pages').update({active}).eq('id',pageId).eq('owner',user).select('id,active,end_date')) as {active:boolean;end_date:string|null}[];
+    if(!rows?.length)throw new ApiError('Page not found.',404);return json({ok:true,active:rows[0].active,endDate:typeof rows[0].end_date==='string'?rows[0].end_date.slice(0,10):null});
+  }
+  if(data.action==='linkContent'){
+    const link=validated(()=>contentLink(data));
+    const result=await query(db.rpc('desk_link_content',{p_owner:user,p_posts:link.posts,p_mode:link.mode,p_group:link.groupId})) as {groupId:string|null;linked:number};
+    return json({ok:true,groupId:result.groupId??null,linked:result.linked});
+  }
+  if(data.action==='reconcileAlerts'){
+    const result=await reconcileWorkspaceAlerts(user);
+    if(!result)throw new ApiError('This workspace history is too large to check alerts in one pass.',409);return json({ok:true,...result});
   }
   if(data.action==='addPage'){
     return json(await addManagedPage(user,user,data));

@@ -1,4 +1,4 @@
-import { normalizeInstagramPost, parseCounter } from '../providers';
+import { instagramContentType, normalizeInstagramPost, parseCounter } from '../providers';
 import { boolean, checkPayload, collectPosts, envelopes, image, object, text } from './shared';
 import { ProviderError } from './types';
 import type { SocialDataProvider, StandardPost, StandardProfile } from './types';
@@ -72,9 +72,7 @@ export const instagramLooter: SocialDataProvider = {
         if (!/^\d+(?:_\d+)?$/.test(postId)) return null;
         const post = normalizeInstagramPost({ ...raw, pk: postId }, page);
         if (!post) return null;
-        const type: StandardPost['type'] = raw.media_type === 8 || raw.__typename === 'GraphSidecar' || Array.isArray(raw.carousel_media) ? 'carousel'
-          : raw.media_type === 2 || raw.is_video === true || raw.__typename === 'GraphVideo' ? 'video'
-            : raw.media_type === 1 || raw.is_video === false || raw.__typename === 'GraphImage' ? 'image' : null;
+        const type: StandardPost['type'] = instagramContentType(raw);
         // play_count can include Facebook. Never substitute a combined total when
         // the payload indicates cross-platform plays and omits the Instagram total.
         const combined = (exact(raw.fb_play_count, raw.facebook_play_count) ?? 0) > 0 || raw.is_crossposted_to_facebook === true;

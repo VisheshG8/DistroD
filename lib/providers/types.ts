@@ -1,4 +1,4 @@
-import type { PageFetchResult, PageInput, Platform, Post } from '../providers';
+import type { ContentType, PageFetchResult, PageInput, Platform, Post } from '../providers';
 
 export type ProviderId = 'youtube-official' | 'hikerapi' | 'lamatok' | 'tikhub' | 'scrapecreators' | 'instagram-looter';
 export type Scope = { mode: 'posts' | 'date'; postLimit: number; from: string | null; to: string | null };
@@ -6,7 +6,7 @@ export type StandardProfile = {
   id: string | null; handle: string; name: string; avatar: string | null;
   followers: number | null; following: number | null; postCount: number | null; isVerified: boolean | null;
 };
-export type StandardPost = Post & { type: 'video' | 'image' | 'carousel' | null; sourceAssetId: string | null };
+export type StandardPost = Post & { type: ContentType | null; sourceAssetId: string | null };
 export type SocialFetchResult = Omit<PageFetchResult, 'posts'> & { profile: StandardProfile; posts: StandardPost[] };
 export type ProviderRequest = (providerId: string, url: string, headers: Record<string, string>) => Promise<any>;
 export type ProviderContext = { scope: Scope; key: string; request: ProviderRequest };

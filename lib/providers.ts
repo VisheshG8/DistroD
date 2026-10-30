@@ -12,7 +12,10 @@ export type Post = {
   shares: number | null; saves: number | null; durationSeconds: number | null;
   likesReason?: 'hidden' | 'not-returned' | null;
   isPinned?: boolean;
+  /** Format from the provider's own fields; null when the payload does not say. audioId is a matching hint only. */
+  type?: ContentType | null; audioId?: string | null;
 };
+export type ContentType = 'reel' | 'short' | 'video' | 'carousel' | 'image';
 export type Overall = { views: number | null; posts: number | null; followers: number | null;
   likes: number | null; comments: number | null; shares: number | null; note: string };
 export type PageFetchResult = {
@@ -136,14 +139,39 @@ function image(...values: unknown[]): string | null {
 function duration(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
   if (typeof value !== 'string') return null;
+  // YouTube's lengthSeconds and some vendors' durations arrive as numeric strings.
+  if (/^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value);
   if (/^\d+(?::\d{2}){1,2}$/.test(value)) return value.split(':').reduce((n, part) => n * 60 + Number(part), 0);
   const iso = value.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/);
   return iso ? Number(iso[1] || 0) * 3600 + Number(iso[2] || 0) * 60 + Number(iso[3] || 0) : null;
 }
 
+// Provider IDs can exceed JS's safe integer range; only exact strings or safe integers are kept.
+function identifier(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && /^[\w:.-]{1,200}$/.test(value.trim()) && !/^0+$/.test(value.trim())) return value.trim();
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+  }
+  return null;
+}
+
+/** Instagram media_type 8 is a carousel, 2 a video (product_type clips: a Reel), 1 an image. */
+export function instagramContentType(item: Json): ContentType | null {
+  if (item.media_type === 8 || item.product_type === 'carousel_container' || /Sidecar$/.test(String(item.__typename || ''))
+    || Array.isArray(item.carousel_media) || Array.isArray(item.edge_sidecar_to_children?.edges)) return 'carousel';
+  if (item.product_type === 'clips') return 'reel';
+  if (item.media_type === 2 || item.is_video === true || /Video$/.test(String(item.__typename || ''))) return 'video';
+  if (item.media_type === 1 || item.is_video === false || /Image$/.test(String(item.__typename || ''))) return 'image';
+  return null;
+}
+/** TikTok photo mode carries image_post_info (app) or imagePost (web); everything else with a video is a video. */
+export function tiktokContentType(item: Json): ContentType | null {
+  return item.image_post_info || Array.isArray(item.imagePost?.images) ? 'carousel' : item.video ? 'video' : null;
+}
+
 function basePost(ctx: Context, id: string): Post {
   return { id, pageId: ctx.page.id, platform: ctx.page.platform, url: '', title: '', publishedAt: null,
-    thumbnail: null, views: null, likes: null, comments: null, shares: null, saves: null, durationSeconds: null };
+    thumbnail: null, views: null, likes: null, comments: null, shares: null, saves: null, durationSeconds: null, type: null, audioId: null };
 }
 
 function instagramPost(ctx: Context, input: Json): Post | null {
@@ -167,6 +195,10 @@ function instagramPost(ctx: Context, input: Json): Post | null {
   post.shares = counter(ctx, item.share_count, item.reshare_count);
   post.saves = counter(ctx, item.save_count);
   post.durationSeconds = duration(item.video_duration);
+  post.type = instagramContentType(item);
+  // Original audio usually gets a new ID per uploader, so this is a hint for matching, never proof.
+  post.audioId = identifier(item.clips_metadata?.original_sound_info?.audio_asset_id, item.clips_metadata?.music_info?.music_asset_info?.audio_cluster_id,
+    item.clips_metadata?.audio_asset_id, item.music_metadata?.music_info?.music_asset_info?.audio_cluster_id);
   return post;
 }
 
@@ -187,12 +219,16 @@ function tiktokPost(ctx: Context, input: Json): Post | null {
   post.saves = counter(ctx, stats.collect_count, stats.collectCount, item.collectCount);
   post.isPinned = item.isPinned === true || item.isTop === true || item.is_top === 1;
   // TikTok's app payload uses milliseconds; its web payload uses seconds.
-  post.durationSeconds = item.aweme_id && typeof item.video?.duration === 'number'
-    ? duration(item.video.duration / 1000) : duration(item.video?.duration);
+  const length = item.video?.duration;
+  post.durationSeconds = item.aweme_id && (typeof length === 'number' || /^\d+(?:\.\d+)?$/.test(String(length ?? '').trim()))
+    ? duration(Number(length) / 1000) : duration(length);
+  post.type = tiktokContentType(item);
+  post.audioId = identifier(item.music?.id_str, item.music?.id, item.music?.mid);
   return post;
 }
 
-function youtubePost(ctx: Context, input: Json): Post | null {
+/** kind comes from the feed the item was listed in (the channel's Shorts or Videos tab); the official API does not say. */
+function youtubePost(ctx: Context, input: Json, kind: 'short' | 'video' = 'video'): Post | null {
   const item = object(input);
   const id = string(item.video_id, item.videoId, typeof item.id === 'string' ? item.id : '', item.id?.videoId);
   if (!id) return null;
@@ -208,6 +244,7 @@ function youtubePost(ctx: Context, input: Json): Post | null {
   post.comments = counter(ctx, stats.commentCount, item.commentCountInt, item.comment_count, item.commentCount);
   // YouTube does not expose public share/save counts. Never synthesize them.
   post.durationSeconds = duration(item.contentDetails?.duration) ?? duration(item.lengthSeconds) ?? duration(item.lengthInSeconds) ?? duration(item.duration) ?? (typeof item.durationMs === 'number' ? item.durationMs / 1000 : null);
+  post.type = kind === 'short' || /^shorts?$/i.test(string(item.type)) || /youtube\.com\/shorts\//i.test(post.url) ? 'short' : 'video';
   return post;
 }
 
@@ -217,8 +254,8 @@ export function normalizeInstagramPost(item: Json, page: PageInput): Post | null
 export function normalizeTikTokPost(item: Json, page: PageInput): Post | null {
   return tiktokPost(normalizationContext(page), item);
 }
-export function normalizeYouTubePost(item: Json, page: PageInput): Post | null {
-  return youtubePost(normalizationContext(page), item);
+export function normalizeYouTubePost(item: Json, page: PageInput, kind: 'short' | 'video' = 'video'): Post | null {
+  return youtubePost(normalizationContext(page), item, kind);
 }
 function normalizationContext(page: PageInput): Context {
   return { page, settings: { provider: 'tikhub', postLimit: 30, apiKey: '', youtubeKey: '' }, limit: 30,
@@ -487,7 +524,7 @@ async function unofficialYouTube(ctx: Context): Promise<PageFetchResult> {
         const items = data[feed.kind];
         if (!Array.isArray(items)) throw new Error('Unexpected YouTube feed response.');
         const before = posts.size;
-        const added = append(posts, ctx, items, youtubePost);
+        const added = append(posts, ctx, items, (context, item) => youtubePost(context, item, feed.kind === 'shorts' ? 'short' : 'video'));
         feed.olderPages = olderPage(ctx, added) ? feed.olderPages + 1 : 0;
         feed.count += items.length;
         const next = string(data.continuationToken, data.continuation_token);

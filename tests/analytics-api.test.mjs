@@ -20,7 +20,7 @@ function loadTs(file,exports,context={}){
   const code=stripTypeScriptTypes(source,{mode:'transform'}).replace(/\bexport\s+/g,'');
   return new Script(code+'\n;({'+exports.join(',')+'})',{filename:file}).runInNewContext({Error,...context});
 }
-const input=loadTs('../lib/analytics/input.ts',['pageMetadata','validId','validRange','pageInput'],{parsePage,scopeFromDates});
+const input=loadTs('../lib/analytics/input.ts',['pageMetadata','validId','validRange','pageInput','activeInput','contentLink'],{parsePage,scopeFromDates});
 async function fixture(){
   const pg=new PGlite();
   try{
@@ -28,7 +28,7 @@ async function fixture(){
       create schema auth;create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
       create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
       grant usage on schema auth to authenticated;grant execute on function auth.uid() to authenticated;`);
-    for(const file of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql','20261026020000_analytics_transfer.sql','20261026030000_instagram_looter_performance.sql']){
+    for(const file of ['20261024000000_init.sql','20261024010000_sdk_operations.sql','20261024015000_sdk_admin.sql','20261024020000_sdk_legacy_import.sql','20261025000000_workspace_transfer.sql','20261026000000_admin_directory.sql','20261026010000_analytics_history.sql','20261026015000_analytics_operations.sql','20261026020000_analytics_transfer.sql','20261026030000_instagram_looter_performance.sql','20261029000000_content_dashboard.sql']){
       await pg.exec(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
     }
     await pg.query(`insert into auth.users(id,email)values($1,'user@example.test'),($2,'other@example.test'),($3,'admin@example.test'),($4,'empty@example.test')`,[user,other,admin,empty]);
@@ -47,7 +47,7 @@ async function fixture(){
     const base={Date:ClockDate,URL,URLSearchParams,Response,Request,Buffer,TextDecoder,Uint8Array,AbortController,DOMException,postDates,scopeKey,storedScope,scopeFromDates,
       connectDatabase:()=>db,getCurrentUser:async()=>state.authUser,...secrets};
     const server=loadTs('../lib/server.ts',['ApiError','body','database','query','fail','guard','json','owner','currentAccount','requireAdmin','encrypt','decrypt'],base);
-    const metrics=loadTs('../lib/analytics/metrics.ts',['alertCandidates','rangeForPreset'],base);
+    const metrics=loadTs('../lib/analytics/metrics.ts',['alertCandidates','alertCheck','rangeForPreset'],base);
     const analytics=loadTs('../lib/analytics/server.ts',['analyticsChunk','analyticsPost','reconcileWorkspaceAlerts'],{...base,...server,...metrics,...input});
     const refreshWorkspacePage=async(ownerId,pageId,scope)=>{state.refreshes.push({ownerId,pageId,scope:plain(scope)});if(state.refreshError)throw state.refreshError;return {page:{id:pageId}};};
     const operations=loadTs('../lib/analytics/operations.ts',['addManagedPage'],{...base,...server,...input,refreshWorkspacePage});
@@ -298,5 +298,71 @@ test('managed page RPC independently authorizes actors and rolls back collection
     assert.equal(responses.filter(r=>r.status==='fulfilled').length,1);assert.equal(responses.filter(r=>r.status==='rejected'&&r.reason.status===400).length,1);
     assert.equal((await f.pg.query('select count(*)::int n from public.pages where owner=$1',[empty])).rows[0].n,500);assert.equal((await f.pg.query('select count(*)::int n from public.collections where owner=$1',[empty])).rows[0].n,1);
     await f.pg.query("update public.users set user_type='user' where id=$1",[admin]);await assert.rejects(f.rpc('desk_add_managed_page',capped),e=>e.status===403);
+  }finally{await f.close();}
+});
+
+test('Page Master inputs change newer fields only when sent and validate status and content links',()=>{
+  assert.deepEqual(Object.keys(input.pageMetadata({monthlyPay:1})).sort(),['active','editor','monthly_pay','notes','start_date'],'an older form never clears the newer fields');
+  assert.deepEqual(plain(input.pageMetadata({displayName:' Page A ',alertQuietDays:'3',endDate:'2026-10-05',startDate:'2026-10-01'})),{monthly_pay:null,editor:'',start_date:'2026-10-01',active:true,notes:'',display_name:'Page A',alert_quiet_days:3,end_date:'2026-10-05'});
+  assert.deepEqual(plain(input.pageMetadata({displayName:null,alertQuietDays:'',endDate:''})),{monthly_pay:null,editor:'',start_date:null,active:true,notes:'',display_name:'',alert_quiet_days:null,end_date:null});
+  for(const metadata of [{displayName:'x'.repeat(151)},{alertQuietDays:0},{alertQuietDays:61},{alertQuietDays:2.5},{alertQuietDays:'1e1'},{endDate:'2026-02-30'},{startDate:'2026-10-02',endDate:'2026-10-01'}])assert.throws(()=>input.pageMetadata(metadata),undefined,JSON.stringify(metadata));
+  assert.deepEqual(plain(input.activeInput({pageId:page.toUpperCase(),active:false})),{pageId:page.toUpperCase(),active:false});
+  for(const value of [{pageId:page},{pageId:page,active:'false'},{pageId:'x',active:true}])assert.throws(()=>input.activeInput(value));
+  const posts=[{pageId:page.toUpperCase(),postId:'one'},{pageId:otherPage,postId:'two'}];
+  assert.deepEqual(plain(input.contentLink({mode:'group',posts})),{posts:[{pageId:page,postId:'one'},{pageId:otherPage,postId:'two'}],mode:'group',groupId:null});
+  assert.equal(input.contentLink({mode:'group',posts,groupId:'ca_12345678-1234-4123-8123-123456789abc'}).groupId,'ca_12345678-1234-4123-8123-123456789abc');
+  for(const value of [{mode:'merge',posts},{mode:'group',posts:[]},{mode:'group',posts:Array.from({length:51},(_,i)=>({pageId:page,postId:'p'+i}))},{mode:'group',posts:[posts[0],{...posts[0],pageId:page}]},
+    {mode:'group',posts:[{pageId:page,postId:''}]},{mode:'group',posts:[{pageId:page}]},{mode:'group',posts:['x']},{mode:'unlink',posts,groupId:'ca_12345678-1234-4123-8123-123456789abc'},{mode:'group',posts,groupId:'ca_demo-1'}])
+    assert.throws(()=>input.contentLink(value),undefined,JSON.stringify(value).slice(0,80));
+});
+
+test('status toggles, display names, content links and alert checks are owner-scoped actions',async()=>{
+  const f=await fixture();try{
+    const indiaToday=new Date(Date.now()+5.5*3600000).toISOString().slice(0,10);
+    let result=await f.mutate({action:'savePage',pageId:page,monthlyPay:500,displayName:'Page A',alertQuietDays:4});assert.equal(result.response.status,200,JSON.stringify(result.body));
+    result=await f.mutate({action:'savePage',pageId:page,monthlyPay:600,editor:'Asha'});assert.equal(result.response.status,200);
+    let saved=(await f.pg.query('select display_name,alert_quiet_days,monthly_pay from public.pages where id=$1',[page])).rows[0];assert.equal(saved.display_name,'Page A');assert.equal(saved.alert_quiet_days,4);assert.equal(Number(saved.monthly_pay),600);
+    result=await f.mutate({action:'setActive',pageId:page,active:false,ownerId:other});assert.equal(result.response.status,200,JSON.stringify(result.body));assert.deepEqual(result.body,{ok:true,active:false,endDate:indiaToday});
+    let pages=(await f.get()).body.pages;assert.equal(pages[0].displayName,'Page A');assert.equal(pages[0].alertQuietDays,4);assert.equal(pages[0].endDate,indiaToday);assert.equal(pages[0].active,false);
+    result=await f.mutate({action:'setActive',pageId:page,active:true});assert.deepEqual(result.body,{ok:true,active:true,endDate:null});
+    for(const data of [{action:'setActive',pageId:otherPage,active:false},{action:'linkContent',mode:'unlink',posts:[{pageId:otherPage,postId:'theirs'}]}]){
+      result=await f.mutate({...data,ownerId:other});assert.equal(result.response.status,404,data.action);
+    }
+    assert.equal((await f.pg.query('select active from public.pages where id=$1',[otherPage])).rows[0].active,true);
+    for(const data of [{action:'setActive',pageId:page,active:'false'},{action:'linkContent',mode:'group',posts:[]},{action:'linkContent',mode:'group',posts:[{pageId:page,postId:'x'}],groupId:'ca_forged'}]){
+      result=await f.mutate(data);assert.equal(result.response.status,400,JSON.stringify(data));
+    }
+    const second=(await f.pg.query(`insert into public.pages(owner,platform,handle,url,name)values($1,'tiktok','second','https://www.tiktok.com/@second','Second') returning id`,[user])).rows[0].id;
+    await f.pg.query(`insert into public.page_posts(owner,page_id,post_id,payload,created_at)values($1,$2,'a','{"title":"Same"}','2026-10-24'),($1,$3,'b','{"title":"Same"}','2026-10-24'),($4,$5,'theirs','{}','2026-10-24')`,[user,page,second,other,otherPage]);
+    result=await f.mutate({action:'linkContent',mode:'group',posts:[{pageId:page,postId:'a'},{pageId:second,postId:'b'}]});assert.equal(result.response.status,200,JSON.stringify(result.body));
+    const groupId=result.body.groupId;assert.match(groupId,/^ca_/);assert.equal(result.body.linked,2);
+    const chunks={};let cursor=(await f.get()).body.nextCursor;while(cursor){const next=await f.get({...range,cursor});for(const [key,value] of Object.entries(next.body))if(Array.isArray(value))(chunks[key]||=[]).push(...value);cursor=next.body.nextCursor;}
+    assert.deepEqual(chunks.posts.map(p=>p.sourceAssetId),[groupId,groupId]);
+    result=await f.mutate({action:'linkContent',mode:'group',groupId,posts:[{pageId:otherPage,postId:'theirs'}]});assert.equal(result.response.status,404);
+    assert.equal((await f.pg.query("select source_asset_id from public.page_posts where post_id='theirs'")).rows[0].source_asset_id,null);
+    result=await f.mutate({action:'linkContent',mode:'unlink',posts:[{pageId:second,postId:'b'}]});assert.deepEqual(result.body,{ok:true,groupId:null,linked:1});
+    // The user's page has never refreshed, so it cannot be checked and its open alert stays open.
+    result=await f.mutate({action:'reconcileAlerts',ownerId:other});assert.equal(result.response.status,200,JSON.stringify(result.body));assert.deepEqual(result.body,{ok:true,opened:0,resolved:0,unchecked:2});
+    assert.equal((await f.pg.query('select resolved_at from public.alerts where id=$1',[alert])).rows[0].resolved_at,null);
+    assert.equal((await f.pg.query('select resolved_at from public.alerts where id=$1',[otherAlert])).rows[0].resolved_at,null);
+    assert.ok(f.calls.some(c=>c.path==='/rest/v1/rpc/desk_reconcile_alerts'&&Array.isArray(c.body.p_skip_pages)&&c.body.p_owner===user));
+    f.state.authUser=null;result=await f.mutate({action:'reconcileAlerts'});assert.equal(result.response.status,401);
+  }finally{await f.close();}
+});
+
+test('adding a page that is already tracked reports it, fills blank details and skips a recent refresh',async()=>{
+  const f=await fixture();try{
+    const indiaToday=new Date(Date.now()+5.5*3600000).toISOString().slice(0,10);
+    let result=await f.mutate({action:'addPage',input:'@fresh_channel',platform:'youtube',displayName:'Page B'});
+    assert.equal(result.response.status,200,JSON.stringify(result.body));assert.equal(result.body.existed,false);assert.equal(result.body.refreshed,true);
+    let saved=(await f.pg.query('select display_name,start_date from public.pages where id=$1',[result.body.pageId])).rows[0];assert.equal(saved.display_name,'Page B');assert.equal(new Date(saved.start_date).toISOString().slice(0,10),indiaToday,'start date defaults to the day the page was added');
+    const refreshes=f.state.refreshes.length;
+    await f.pg.query("update public.pages set last_synced_at='2026-10-25T10:00:00Z' where id=$1",[page]);
+    result=await f.mutate({action:'addPage',input:'@mine',platform:'youtube',editor:'Typed editor',monthlyPay:300,displayName:'Page A'});
+    assert.equal(result.response.status,200,JSON.stringify(result.body));assert.deepEqual(result.body,{ok:true,pageId:page,existed:true,refreshed:false});assert.equal(f.state.refreshes.length,refreshes,'a page refreshed two hours ago is not fetched again');
+    saved=(await f.pg.query('select editor,monthly_pay,display_name from public.pages where id=$1',[page])).rows[0];assert.equal(saved.editor,'Typed editor');assert.equal(Number(saved.monthly_pay),300);assert.equal(saved.display_name,'Page A');
+    await f.pg.query("update public.pages set last_synced_at='2026-10-24T10:00:00Z' where id=$1",[page]);
+    result=await f.mutate({action:'addPage',input:'@mine',platform:'youtube',editor:'Ignored'});assert.equal(result.body.existed,true);assert.equal(result.body.refreshed,true);assert.equal(f.state.refreshes.length,refreshes+1);
+    assert.equal((await f.pg.query('select editor from public.pages where id=$1',[page])).rows[0].editor,'Typed editor','typed details never overwrite saved ones');
   }finally{await f.close();}
 });
